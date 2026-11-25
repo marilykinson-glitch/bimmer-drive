@@ -1,0 +1,586 @@
+{
+  "id": "bimmer_drive",
+  "title": "Camera & VietMap",
+  "description": "Tích hợp 3-trong-1 siêu mượt cho đồng hồ & HUD BMW iDrive 7: (1) Camera gương xi nhan & Camera trước AR dẫn đường; (2) Biển tốc độ VietMap Live / Camera BMW / Bản đồ BMW kèm biển --- chuẩn hãng (lọc biển 5 km/h hầm xe, chớp mượt khi quá tốc); (3) Đưa màn hình giữa (VietMap Android Auto) lên đồng hồ. Chỉ dùng 1 dịch vụ gốc duy nhất, tự ngủ giải mã H.264 khi đi thẳng.",
+  "version": "1.0.0",
+  "startType": "autostart",
+  "vendor": "custom",
+  "loggingId": "OABD",
+  "signals": {
+    "de.bmw.body.Light": {
+      "StatusFunctionsIndicators": "s",
+      "StatusFunctionsIndicators2": "s"
+    },
+    "de.bmw.infotainment.vehicle.Vehicle2": {
+      "_optional": "vehicle speed for mirror limit, front camera threshold, blinker distance cap and overspeed pulse",
+      "statusCarSpeed2": "rs"
+    },
+    "de.bmw.infrastructure.VehicleInformation": {
+      "_optional": "instant reverse gear release so the rear-view camera never waits",
+      "statusGearboxDrive": "s",
+      "DataPowerTrain2": "s"
+    },
+    "de.bmw.infotainment.video.cameraproxy.ICAM2Proxy": "*",
+    "de.bmw.infotainment.video.cameraproxy.CameraProxy": "*",
+    "de.bmw.dass.XView3D": "*"
+  },
+  "screens": [
+    {
+      "name": "MAIN",
+      "kind": "canvas",
+      "title": "Camera & VietMap",
+      "buttons": [
+        [
+          "BTN_LEFT",
+          "Thử trái"
+        ],
+        [
+          "BTN_RIGHT",
+          "Thử phải"
+        ],
+        [
+          "BTN_FRONT",
+          "Camera trước"
+        ],
+        [
+          "BTN_SIGN",
+          "Biển tốc độ"
+        ],
+        [
+          "BTN_SETTINGS",
+          "Cài đặt"
+        ]
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "key": "enabled",
+      "label": "Camera theo xi nhan",
+      "type": "choice",
+      "default": "on",
+      "options": [
+        ["on", "Bật"],
+        ["off", "Tắt"]
+      ]
+    },
+    {
+      "key": "front",
+      "label": "Camera trước tự động",
+      "type": "choice",
+      "default": "off",
+      "options": [
+        ["off", "Tắt"],
+        ["slow30", "Dưới 30 km/h"],
+        ["slow60", "Dưới 60 km/h"],
+        ["always", "Luôn hiện"]
+      ]
+    },
+    {
+      "key": "frontSize",
+      "label": "Cỡ cam trước",
+      "type": "choice",
+      "default": "sharp",
+      "options": [
+        ["sharp", "Rộng nét (640)"],
+        ["wide", "Rộng kiểu BMW (960)"],
+        ["small", "Nhỏ"],
+        ["medium", "Vừa"],
+        ["large", "Lớn"]
+      ]
+    },
+    {
+      "key": "ar",
+      "label": "Mũi tên AR dẫn đường",
+      "type": "choice",
+      "default": "near",
+      "options": [
+        ["near", "Khi sắp rẽ"],
+        ["always", "Suốt đường"],
+        ["off", "Tắt"]
+      ]
+    },
+    {
+      "key": "blinkFront",
+      "label": "Khi xi nhan lúc cam trước bật",
+      "type": "choice",
+      "default": "always",
+      "options": [
+        ["always", "Giữ cả cam trước & gương"],
+        ["nav", "Giữ khi có mũi tên rẽ"],
+        ["mirror", "Chỉ hiện cam gương"]
+      ]
+    },
+    {
+      "key": "dualTarget",
+      "label": "Vùng ghép 2 camera",
+      "type": "choice",
+      "default": "map",
+      "options": [
+        ["map", "Ở vùng bản đồ"],
+        ["panel", "Chung vùng cam gương"]
+      ]
+    },
+    {
+      "key": "arStyle",
+      "label": "Kiểu mũi tên AR",
+      "type": "choice",
+      "default": "bmw",
+      "options": [
+        ["bmw", "Dải chevron BMW"],
+        ["road", "Nằm trên mặt đường"]
+      ]
+    },
+    {
+      "key": "arCard",
+      "label": "Thẻ báo rẽ AR",
+      "type": "choice",
+      "default": "on",
+      "options": [
+        ["on", "Hiện"],
+        ["off", "Ẩn"]
+      ]
+    },
+    {
+      "key": "arStreet",
+      "label": "Tên đường trên cam trước",
+      "type": "choice",
+      "default": "on",
+      "options": [
+        ["on", "Hiện"],
+        ["off", "Ẩn"]
+      ]
+    },
+    {
+      "key": "arColor",
+      "label": "Màu mũi tên AR",
+      "type": "choice",
+      "default": "white",
+      "options": [
+        ["white", "Trắng"],
+        ["blue", "Xanh BMW"]
+      ]
+    },
+    {
+      "key": "signMode",
+      "label": "Biển tốc độ trên đồng hồ",
+      "type": "choice",
+      "default": "on",
+      "options": [
+        ["on", "Bật"],
+        ["off", "Tắt"]
+      ]
+    },
+    {
+      "key": "signShow",
+      "label": "Hiện biển tốc độ trên",
+      "type": "choice",
+      "default": "both",
+      "options": [
+        ["both", "Đồng hồ và HUD"],
+        ["cluster", "Chỉ đồng hồ"],
+        ["hud", "Chỉ HUD"]
+      ]
+    },
+    {
+      "key": "signEmpty",
+      "label": "Khi không có biển tốc độ",
+      "type": "choice",
+      "default": "dashes",
+      "options": [
+        ["dashes", "Hiện biển --- giống BMW"],
+        ["hide", "Ẩn biển"]
+      ]
+    },
+    {
+      "key": "signFrontcam",
+      "label": "Vẽ biển lên Camera trước",
+      "type": "choice",
+      "default": "on",
+      "options": [
+        ["on", "Bật"],
+        ["off", "Tắt (chỉ trên bản đồ)"]
+      ]
+    },
+    {
+      "key": "signSize",
+      "label": "Cỡ biển tốc độ",
+      "type": "choice",
+      "default": "medium",
+      "options": [
+        ["small", "Nhỏ"],
+        ["medium", "Vừa"],
+        ["large", "Lớn"]
+      ]
+    },
+    {
+      "key": "signSide",
+      "label": "Vị trí biển trên đồng hồ",
+      "type": "choice",
+      "default": "right",
+      "options": [
+        ["right", "Trên, bên phải"],
+        ["left", "Trên, bên trái"]
+      ]
+    },
+    {
+      "key": "signHudSide",
+      "label": "Vị trí biển trên HUD",
+      "type": "choice",
+      "default": "left",
+      "options": [
+        ["left", "Trên, bên trái"],
+        ["right", "Trên, bên phải"]
+      ]
+    },
+    {
+      "key": "signCamera",
+      "label": "Ưu tiên biển camera KAFAS BMW",
+      "type": "choice",
+      "default": "on",
+      "options": [
+        ["on", "Bật"],
+        ["off", "Tắt (ưu tiên VietMap)"]
+      ]
+    },
+    {
+      "key": "signBmwMap",
+      "label": "Biển dự phòng từ bản đồ BMW",
+      "type": "choice",
+      "default": "on",
+      "options": [
+        ["on", "Bật"],
+        ["off", "Tắt"]
+      ]
+    },
+    {
+      "key": "signMinLimit",
+      "label": "Lọc biển tốc độ thấp hầm xe",
+      "type": "choice",
+      "default": "10",
+      "options": [
+        ["10", "Bỏ biển 5 km/h (từ 10 km/h)"],
+        ["5", "Hiện cả biển 5 km/h"]
+      ]
+    },
+    {
+      "key": "signWarn",
+      "label": "Chớp biển khi quá tốc độ",
+      "type": "choice",
+      "default": "5",
+      "options": [
+        ["off", "Tắt"],
+        ["0", "Vượt biển là chớp"],
+        ["5", "Vượt 5 km/h"],
+        ["10", "Vượt 10 km/h"]
+      ]
+    },
+    {
+      "key": "signScreen",
+      "label": "Đọc biển trên màn giữa (CarPlay)",
+      "type": "choice",
+      "default": "off",
+      "options": [
+        ["off", "Tắt"],
+        ["on", "Bật (thử nghiệm)"]
+      ]
+    },
+    {
+      "key": "vmcMode",
+      "label": "Đưa màn giữa lên đồng hồ (VietMap AA)",
+      "type": "choice",
+      "default": "off",
+      "options": [
+        ["off", "Tắt · bản đồ gốc điện thoại"],
+        ["on", "Bật · chiếu màn giữa lên đồng hồ"]
+      ]
+    },
+    {
+      "key": "vmcView",
+      "label": "Khung nhìn màn giữa trên đồng hồ",
+      "type": "choice",
+      "default": "fit",
+      "options": [
+        ["fit", "Toàn bản đồ"],
+        ["zoom1", "Phóng to 1,25×"],
+        ["zoom2", "Phóng to 1,5×"]
+      ]
+    },
+    {
+      "key": "aim",
+      "label": "Hướng nhìn cam gương",
+      "type": "choice",
+      "default": "rear",
+      "options": [
+        ["rear", "Chếch về sau"],
+        ["side", "Ngang"],
+        ["front", "Chếch về trước"]
+      ]
+    },
+    {
+      "key": "zoom",
+      "label": "Phóng to cam gương",
+      "type": "choice",
+      "default": "100",
+      "options": [
+        ["100", "Không"],
+        ["125", "1,25 lần"],
+        ["150", "1,5 lần"],
+        ["200", "2 lần"]
+      ]
+    },
+    {
+      "key": "hold",
+      "label": "Giữ cam gương sau tắt xi nhan",
+      "type": "choice",
+      "default": "2",
+      "options": [
+        ["1", "1 giây"],
+        ["2", "2 giây"],
+        ["3", "3 giây"],
+        ["5", "5 giây"]
+      ]
+    },
+    {
+      "key": "tip",
+      "label": "Gạt nhẹ xi nhan 3 nháy",
+      "type": "choice",
+      "default": "on",
+      "options": [
+        ["on", "Có hiện cam"],
+        ["off", "Không hiện"]
+      ]
+    },
+    {
+      "key": "shape",
+      "label": "Hình dạng cam gương",
+      "type": "choice",
+      "default": "round",
+      "options": [
+        ["round", "Tròn"],
+        ["square", "Chữ nhật"]
+      ]
+    },
+    {
+      "key": "nightRim",
+      "label": "Viền cam gương ban đêm",
+      "type": "choice",
+      "default": "dim",
+      "options": [
+        ["dim", "Tự dịu ban đêm"],
+        ["bright", "Luôn sáng"]
+      ]
+    },
+    {
+      "key": "size",
+      "label": "Cỡ vòng cam gương",
+      "type": "choice",
+      "default": "fit",
+      "options": [
+        ["small", "Nhỏ (288)"],
+        ["fit", "Vừa khít (320)"],
+        ["medium", "Vừa (384)"],
+        ["large", "Lớn (480)"]
+      ]
+    },
+    {
+      "key": "place",
+      "label": "Vị trí cam gương",
+      "type": "choice",
+      "default": "gauge",
+      "options": [
+        ["gauge", "Trong vòng đồng hồ"],
+        ["center", "Giữa"],
+        ["side", "Sát mép"],
+        ["top", "Giữa, trên"],
+        ["bottom", "Giữa, dưới"]
+      ]
+    },
+    {
+      "key": "target",
+      "label": "Vùng đích cam gương",
+      "type": "choice",
+      "default": "map",
+      "options": [
+        ["map", "Vùng bản đồ"],
+        ["panel", "Toàn đồng hồ"],
+        ["hud", "HUD"]
+      ]
+    },
+    {
+      "key": "mirror",
+      "label": "Lật gương hình cam",
+      "type": "choice",
+      "default": "off",
+      "options": [
+        ["off", "Không"],
+        ["on", "Có"]
+      ]
+    },
+    {
+      "key": "maxSpeed",
+      "label": "Giới hạn tốc độ bật cam gương",
+      "type": "choice",
+      "default": "0",
+      "options": [
+        ["0", "Mọi tốc độ"],
+        ["30", "30 km/h"],
+        ["50", "50 km/h"],
+        ["80", "80 km/h"]
+      ]
+    },
+    {
+      "key": "quadLeft",
+      "label": "Ô cắt cam trái",
+      "type": "choice",
+      "default": "bl",
+      "options": [
+        ["bl", "Dưới, trái"],
+        ["br", "Dưới, phải"],
+        ["tl", "Trên, trái"],
+        ["tr", "Trên, phải"]
+      ]
+    },
+    {
+      "key": "quadRight",
+      "label": "Ô cắt cam phải",
+      "type": "choice",
+      "default": "br",
+      "options": [
+        ["br", "Dưới, phải"],
+        ["bl", "Dưới, trái"],
+        ["tr", "Trên, phải"],
+        ["tl", "Trên, trái"]
+      ]
+    },
+    {
+      "key": "pairSwap",
+      "label": "Đảo hàng ghép 2 khung",
+      "type": "choice",
+      "default": "off",
+      "options": [
+        ["off", "Không"],
+        ["on", "Đảo"]
+      ]
+    },
+    {
+      "key": "rotLeft",
+      "label": "Xoay cam trái",
+      "type": "choice",
+      "default": "0",
+      "options": [
+        ["0", "Không"],
+        ["90", "90° phải"],
+        ["180", "180°"],
+        ["270", "90° trái"]
+      ]
+    },
+    {
+      "key": "rotRight",
+      "label": "Xoay cam phải",
+      "type": "choice",
+      "default": "0",
+      "options": [
+        ["0", "Không"],
+        ["90", "90° phải"],
+        ["180", "180°"],
+        ["270", "90° trái"]
+      ]
+    },
+    {
+      "key": "stretch",
+      "label": "Giãn ngang hình cam",
+      "type": "choice",
+      "default": "100",
+      "options": [
+        ["100", "Không"],
+        ["150", "1,5 lần"],
+        ["200", "2 lần"]
+      ]
+    },
+    {
+      "key": "fps",
+      "label": "Hình/giây camera",
+      "type": "choice",
+      "default": "12",
+      "options": [
+        ["8", "8"],
+        ["10", "10"],
+        ["12", "12"],
+        ["15", "15"]
+      ]
+    },
+    {
+      "key": "mode",
+      "label": "Cách lấy luồng camera",
+      "type": "choice",
+      "default": "mosaic",
+      "options": [
+        ["mosaic", "Cắt từ 4 camera"],
+        ["single", "Riêng cam gương"]
+      ]
+    },
+    {
+      "key": "source",
+      "label": "Tự đánh thức hộp camera",
+      "type": "choice",
+      "default": "auto",
+      "options": [
+        ["auto", "Có"],
+        ["passive", "Không"]
+      ]
+    },
+    {
+      "key": "layer",
+      "label": "Lớp video đồng hồ",
+      "type": "choice",
+      "default": "make",
+      "options": [
+        ["make", "Tạo mỗi lần (nhường slot tối đa)"],
+        ["keep", "Giữ sẵn"]
+      ]
+    },
+    {
+      "key": "signProbe",
+      "label": "Chẩn đoán: dò tín hiệu biển xe",
+      "type": "choice",
+      "default": "off",
+      "options": [
+        ["off", "Tắt"],
+        ["on", "Bật (ghi nhật ký)"]
+      ]
+    },
+    {
+      "key": "theme",
+      "label": "Màu giao diện",
+      "type": "choice",
+      "default": "m_tricolour",
+      "options": [
+        ["m_red", "M Red"],
+        ["m_tricolour", "M Tricolour"],
+        ["ice", "Ice White"],
+        ["amber", "Night Amber"]
+      ]
+    },
+    {
+      "key": "layout",
+      "label": "Bố cục màn hình",
+      "type": "choice",
+      "default": "full",
+      "options": [
+        ["full", "Toàn màn hình"],
+        ["standard", "Tiêu chuẩn"]
+      ]
+    },
+    {
+      "key": "renderer",
+      "label": "Bộ vẽ màn hình",
+      "type": "choice",
+      "default": "auto",
+      "options": [
+        ["auto", "GPU 60 fps (mặc định)"],
+        ["software", "Phần mềm"]
+      ]
+    }
+  ]
+}

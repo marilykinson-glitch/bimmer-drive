@@ -1,0 +1,66 @@
+{
+  "id": "anh-dai-dien",
+  "kind": "tool",
+  "version": "1.0.0",
+  "title": "Trợ thủ MGU Studio (On-Demand)",
+  "description": "Mở trang web QR cho điện thoại khi mở app MGU Studio trên màn hình xe để đổi hình chiếc xe, màn hình khởi động và ảnh đại diện hồ sơ; tự động ngủ đông (0 MB RAM, 0% CPU, đóng cổng mạng) khi không sử dụng.",
+  "license": "GPL-3.0-or-later",
+  "mguHmi": [
+    "ID7"
+  ],
+  "uninstallable": true,
+  "requires": {
+    "mgu-deploy": "0.7.11"
+  },
+  "files": [
+    {
+      "path": "anh-dai-dien.js",
+      "mode": "0644"
+    },
+    {
+      "path": "wbm.js",
+      "mode": "0644"
+    },
+    {
+      "path": "boot.js",
+      "mode": "0644"
+    },
+    {
+      "path": "res.js",
+      "mode": "0644"
+    },
+    {
+      "path": "car3d.js",
+      "mode": "0644"
+    },
+    {
+      "path": "carpaint.js",
+      "mode": "0644"
+    },
+    {
+      "path": "page.html",
+      "mode": "0644"
+    },
+    {
+      "path": "LICENSE.GPL-3.0",
+      "mode": "0644"
+    }
+  ],
+  "units": [
+    {
+      "name": "anh-dai-dien.service"
+    }
+  ],
+  "enable": [
+    {
+      "unit": "anh-dai-dien.service",
+      "target": "multi-user.target"
+    }
+  ],
+  "recmgr": [
+    "anh-dai-dien"
+  ],
+  "restart": [
+    "anh-dai-dien.service"
+  ]
+}

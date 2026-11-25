@@ -1,0 +1,29 @@
+{
+  "id": "bimmer-drive-log",
+  "kind": "tool",
+  "version": "1.0.0",
+  "title": "Nhật ký Camera & VietMap",
+  "description": "In trạng thái trực tiếp, nhật ký trợ thủ bimmer-drive, mgu-sidecam và nhật ký dò biển báo lên cửa sổ MGU Store để kiểm tra nhanh.",
+  "license": "GPL-3.0-or-later",
+  "mguHmi": [
+    "ID7"
+  ],
+  "uninstallable": true,
+  "requires": {
+    "mgu-deploy": "0.7.11"
+  },
+  "files": [
+    {
+      "path": "print-log.sh",
+      "mode": "0755"
+    },
+    {
+      "path": "print-log.js",
+      "mode": "0644"
+    }
+  ],
+  "run": [
+    "/bin/sh",
+    "print-log.sh"
+  ]
+}

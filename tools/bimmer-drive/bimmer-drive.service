@@ -1,0 +1,23 @@
+# bimmer-drive: Unified Cluster Camera, AR Navigation, VietMap Speed Signs & Center-Screen Mirror helper
+[Unit]
+Description=Bimmer Drive: Unified Camera xi nhan & VietMap Cluster Service (bimmer-drive)
+After=network.target ufipc_daemon.service avbstreamhandler.service cluster-render.socket waze-on-cluster.service
+RequiresMountsFor=/var/opt
+StartLimitIntervalSec=0
+
+[Service]
+User=root
+Environment=XDG_RUNTIME_DIR=/run/wayland
+RuntimeDirectory=bimmer-drive
+RuntimeDirectoryMode=0755
+Nice=5
+ExecStart=/bin/sh -c 'exec "$(command -v node || echo /usr/bin/node)" /var/opt/bimmer-drive/current/bimmer-drive.js run'
+ExecStopPost=-/bin/sh -c 'exec "$(command -v node || echo /usr/bin/node)" /var/opt/bimmer-drive/current/bimmer-drive.js deactivate'
+StandardOutput=journal
+StandardError=journal
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
