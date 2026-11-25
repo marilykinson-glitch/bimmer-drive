@@ -77,7 +77,7 @@ bool H264Decoder::open(std::string *err)
     s_->ctx->thread_type = FF_THREAD_SLICE;   /* frame threads would hold pictures back */
     s_->ctx->err_recognition = 0;
     s_->ctx->skip_loop_filter = idle_ ? AVDISCARD_ALL : AVDISCARD_DEFAULT;
-    s_->ctx->skip_frame = idle_ ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
+    s_->ctx->skip_frame = AVDISCARD_DEFAULT;
     int r = avcodec_open2(s_->ctx, codec, nullptr);
     if (r < 0) {
         char e[128];
@@ -97,7 +97,6 @@ void H264Decoder::set_idle(bool idle)
     idle_ = idle;
     if (s_ && s_->ctx) {
         s_->ctx->skip_loop_filter = idle_ ? AVDISCARD_ALL : AVDISCARD_DEFAULT;
-        s_->ctx->skip_frame = idle_ ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
     }
 }
 

@@ -351,6 +351,7 @@ void Pipeline::on_picture(const DecodedFrame &f)
             return;
     }
     /* the second view, at its own pace (only when its camera half actually updated) */
+    bool woke_aux = false;
     if (aux.on && (!pairing || afresh || view_uses_half(aux.vs, cls))) {
         const int64_t ap = aux.fps ? 1000 / (int64_t)aux.fps : 0;
         if (afresh || !ap || now - aux_due_ms_ > 4 * ap)
@@ -373,23 +374,40 @@ void Pipeline::on_picture(const DecodedFrame &f)
                     aux_meta_.ms = now;
                     aux_have_ = true;
                     aux_fresh_ = false;
+                    woke_aux = true;
                 }
             }
         }
     }
-    if (view == kNone)
+    auto wake_main = [this]() {
+        if (wake_fd_ >= 0) {
+            const uint64_t one = 1;
+            ssize_t n = ::write(wake_fd_, &one, sizeof one);
+            (void)n;
+        }
+    };
+    if (view == kNone) {
+        if (woke_aux)
+            wake_main();
         return;
+    }
     /* Skip redundant resampling when the other alternating camera half arrived and our view wasn't touched */
-    if (pairing && !fresh && view != kAll && !view_uses_half(out.views[view], cls))
+    if (pairing && !fresh && view != kAll && !view_uses_half(out.views[view], cls)) {
+        if (woke_aux)
+            wake_main();
         return;
+    }
     /* At most fps views a second, evenly: each view is due one period after
      * the last was due (not after it was made), so 12 a second out of a
      * 15-a-second stream is four pictures of five, not every other one. */
     const int64_t period = out.fps ? 1000 / (int64_t)out.fps : 0;
     if (fresh || !period || now - next_due_ms_ > 4 * period)
         next_due_ms_ = now;
-    if (now + period / 8 < next_due_ms_)
+    if (now + period / 8 < next_due_ms_) {
+        if (woke_aux)
+            wake_main();
         return;
+    }
     next_due_ms_ += period;
     const int64_t t0 = now_us();
     const ViewSpec &vs = out.views[view];

@@ -50,7 +50,7 @@ const { Res } = require('./res');
 const CAR3D = require('./car3d');
 const CARPAINT = require('./carpaint');
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const env = (k, d) => (process.env[k] !== undefined && process.env[k] !== '' ? process.env[k] : d);
 const AVATAR_REL = 'High/2D/Baukasten/ContentElements/illustrations/Static/Avatar/MyVehicle_Avatar';
 const REPL_REL = 'High/2D/Baukasten/ContentElements/illustrations/Replacement/4_sizes/';

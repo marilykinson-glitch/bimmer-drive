@@ -30,7 +30,7 @@ const signread = require('./signread');
 const signsCam = require('./signs-cam');
 const wocMirror = require('./woc-mirror');
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const env = (k, d) => (process.env[k] !== undefined && process.env[k] !== '' ? process.env[k] : d);
 
 const CFG = {
@@ -90,7 +90,7 @@ const STRIKES = 20;
 
 const SIGN_DEFAULTS = {
     mode: 'on', show: 'both', side: 'right', hudSide: 'left', size: 'medium',
-    screen: 'off', warn: '5', camera: 'on', probe: 'off', bmwmap: 'on',
+    source: 'auto', screen: 'off', warn: '5', camera: 'on', probe: 'off', bmwmap: 'on',
     empty: 'dashes', frontcam: 'on', minLimit: '10',
 };
 const WARN_MAP = { off: null, '0': 0, '5': 5, '10': 10 };
@@ -837,14 +837,20 @@ function readControlState(app, now) {
     const saved = app ? (readJson(path.join(app.root, 'data', 'settings.json')) || {}) : {};
     const signsRaw = (c && c.signs && typeof c.signs === 'object') ? c.signs : {
         mode: saved.signMode, show: saved.signShow, empty: saved.signEmpty, frontcam: saved.signFrontcam,
-        side: saved.signSide, hudSide: saved.signHudSide, size: saved.signSize, camera: saved.signCamera,
-        bmwmap: saved.signBmwMap, minLimit: saved.signMinLimit, screen: saved.signScreen, warn: saved.signWarn,
-        probe: saved.signProbe, mapX: saved.signMapX, mapY: saved.signMapY, hudX: saved.signHudX, hudY: saved.signHudY,
+        side: saved.signSide, hudSide: saved.signHudSide, size: saved.signSize, source: saved.signSource,
+        camera: saved.signCamera, bmwmap: saved.signBmwMap, minLimit: saved.signMinLimit, screen: saved.signScreen,
+        warn: saved.signWarn, probe: saved.signProbe, mapX: saved.signMapX, mapY: saved.signMapY, hudX: saved.signHudX, hudY: saved.signHudY,
     };
     const sv = Object.assign({}, SIGN_DEFAULTS);
     Object.keys(SIGN_DEFAULTS).forEach((k) => { if (signsRaw[k] !== undefined && signsRaw[k] !== null) sv[k] = signsRaw[k]; });
     const pos = (x, y) => (Number.isFinite(Number(signsRaw[x])) && signsRaw[x] !== null && Number.isFinite(Number(signsRaw[y])) && signsRaw[y] !== null
         ? { x: Math.round(Number(signsRaw[x])), y: Math.round(Number(signsRaw[y])) } : null);
+
+    const hasExplicitSource = signsRaw.source !== undefined && signsRaw.source !== null;
+    const srcMode = ['auto', 'vietmap', 'vietmap_only', 'bmw_only'].indexOf(sv.source) >= 0 ? sv.source : 'auto';
+    const allowCam = srcMode === 'vietmap_only' ? false : (hasExplicitSource ? true : sv.camera !== 'off');
+    const allowBmwMap = srcMode === 'vietmap_only' ? false : (hasExplicitSource ? true : sv.bmwmap !== 'off');
+    const allowPhone = srcMode !== 'bmw_only';
 
     const signDesired = {
         app: app ? app.id : null,
@@ -853,10 +859,12 @@ function readControlState(app, now) {
         side: sv.side === 'left' ? 'left' : 'right',
         hudSide: sv.hudSide === 'right' ? 'right' : 'left',
         size: SIZES[sv.size] ? sv.size : 'medium',
+        source: srcMode,
+        phone: allowPhone,
         screen: sv.screen === 'on',
-        camera: sv.camera !== 'off',
+        camera: allowCam,
         probe: sv.probe === 'on',
-        bmwMap: sv.bmwmap !== 'off',
+        bmwMap: allowBmwMap,
         empty: sv.empty === 'hide' ? 'hide' : 'dashes',
         frontcam: sv.frontcam !== 'off',
         minLimit: Number(sv.minLimit) === 5 ? 5 : 10,
@@ -919,7 +927,8 @@ function decideSigns(ctrl, nativeState, nativeFresh, isVmcGrabbing, now) {
     const frontTarget = frontCamShown ? (nativeState.target === 'panel' ? 'panel' : 'map') : null;
     const frontOn = d.on && d.frontcam && frontCamShown;
     const clusterSurface = woc.map || frontOn;
-    const phoneFresh = !!(phone.at && now - phone.at < CFG.phoneStaleMs);
+    const phoneFresh = !!(d.phone !== false && phone.at && now - phone.at < CFG.phoneStaleMs);
+    const phoneLimit = phoneFresh && phone.limit ? phone.limit : 0;
     const placing = ctrl.pvFresh;
 
     const camLimit = d.on && d.camera ? signsCam.current(camState, now, log) : 0;
@@ -929,8 +938,13 @@ function decideSigns(ctrl, nativeState, nativeFresh, isVmcGrabbing, now) {
     const onScreen = reading && screen.at && now - screen.at < CFG.screenStaleMs ? screen.limit : 0;
     const mapLimit = d.on && d.bmwMap ? signsCam.mapCurrent(camState, now, d.camera) : 0;
 
-    const source = camLimit ? 'camera' : phoneFresh && phone.limit ? 'phone' : onScreen ? 'screen' : mapLimit ? 'bmwmap' : placing ? 'preview' : null;
-    const limit = camLimit || (phoneFresh && phone.limit) || onScreen || mapLimit || (placing ? PREVIEW_LIMIT : null);
+    const preferPhone = d.source === 'vietmap' || d.source === 'vietmap_only';
+    const source = preferPhone
+        ? (phoneLimit ? 'phone' : camLimit ? 'camera' : onScreen ? 'screen' : mapLimit ? 'bmwmap' : placing ? 'preview' : null)
+        : (camLimit ? 'camera' : phoneLimit ? 'phone' : onScreen ? 'screen' : mapLimit ? 'bmwmap' : placing ? 'preview' : null);
+    const limit = preferPhone
+        ? (phoneLimit || camLimit || onScreen || mapLimit || (placing ? PREVIEW_LIMIT : null))
+        : (camLimit || phoneLimit || onScreen || mapLimit || (placing ? PREVIEW_LIMIT : null));
     const symbol = limit || (d.on && d.empty !== 'hide' && !placing ? '---' : null);
     const g = geometry(d, woc);
     const wantMap = d.on && d.show !== 'hud', wantHud = d.on && d.show !== 'cluster';
@@ -957,6 +971,7 @@ function decideSigns(ctrl, nativeState, nativeFresh, isVmcGrabbing, now) {
     else if (limit && !woc.known && !frontCamShown) why = 'Waze on cluster is not installed';
     else if (limit && !(wantMap && clusterSurface) && !(wantHud && woc.hud)) why = 'Waze on cluster shows no map there';
     else if (reading && !limit) why = screen.error ? 'the centre screen cannot be read' : 'no sign on the centre screen';
+    else if (!limit && d.phone === false) why = 'no sign on this road';
     else if (!limit && !phone.at) why = d.bmwMap && camState.map.ready ? 'no sign on this road' : 'no phone yet';
     else if (!limit && !phoneFresh) why = d.bmwMap && camState.map.ready ? 'no sign on this road' : 'the phone stopped sending';
     else if (!limit) why = 'no sign in VietMap';
@@ -1001,6 +1016,10 @@ function ensureCompatSymlink() {
     try {
         let st = null;
         try { st = fs.lstatSync(CFG.compatSignRun); } catch (e) {}
+        if (st && st.isDirectory() && !st.isSymbolicLink()) {
+            try { fs.unlinkSync(path.join(CFG.compatSignRun, 'status.json')); } catch (e) {}
+            try { fs.rmdirSync(CFG.compatSignRun); st = null; } catch (e) {}
+        }
         if (!st) fs.symlinkSync(CFG.run, CFG.compatSignRun);
     } catch (e) {}
 }

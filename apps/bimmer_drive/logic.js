@@ -456,7 +456,9 @@ function signReport(st, s) {
     const unpaired = !!(pr.on && pr.refused && pr.ago_ms !== null && pr.ago_ms < 10000 && !(p.at && p.ago_ms < pr.ago_ms));
     const ago = (ms) => (ms === null || ms === undefined ? '' : ms < 2000 ? 'vừa xong' : Math.round(ms / 1000) + ' giây trước');
 
-    if (unpaired) lines.push({ text: 'Điện thoại ' + pr.from + ': sai mã ghép 6 số', kind: 'warn' });
+    const srcMode = (s && s.signSource) || (st.settings && st.settings.source) || 'auto';
+    if (srcMode === 'bmw_only') lines.push({ text: 'Điện thoại VietMap: đang chọn chỉ dùng nguyên bản BMW', kind: 'dim' });
+    else if (unpaired) lines.push({ text: 'Điện thoại ' + pr.from + ': sai mã ghép 6 số', kind: 'warn' });
     else if (p.at) lines.push({ text: 'Điện thoại VietMap: ' + p.from + ' · ' + ago(p.ago_ms) + (p.limit ? ' · biển ' + p.limit : ''), kind: p.ago_ms < 5000 ? 'go' : 'warn' });
     else lines.push({ text: 'Điện thoại VietMap: chưa kết nối', kind: bm.on && bm.ready ? 'dim' : 'warn' });
 

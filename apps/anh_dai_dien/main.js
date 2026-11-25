@@ -49,7 +49,7 @@ mgu.run({
         const { ui, log } = ctx;
         let status = null, readAt = 0, thumbs = {}, thumbRev = -1, cmdId = Date.now(), lastKey = '', shown = false;
         let pv = null, mode = 'main', playing = '', playAt = 0;       // the preview: its player, the screen shown, what plays and since when
-        let wakeAt = 0;
+        let wakeAt = 0, visibleSince = Date.now(), wasVis = false;
         const version = (ctx.spec && ctx.spec.version) ? 'Bản ' + ctx.spec.version : '';
 
         function pingWake(now) {
@@ -64,7 +64,10 @@ mgu.run({
         pingWake(Date.now());
 
         function readStatus(now) {
-            if (ui.isVisible('MAIN')) pingWake(now);
+            const vis = ui.isVisible('MAIN');
+            if (vis && !wasVis) visibleSince = now;
+            wasVis = vis;
+            if (vis) pingWake(now);
             if (now - readAt < 700) return;
             readAt = now;
             let s = null;
@@ -147,8 +150,9 @@ mgu.run({
             if (armed && now - armedAt >= ARM_MS) armed = '';
             if (note && !armed && (now - noteAt > NOTE_MS || (s && String(s.message) !== noteOver))) note = '';      // the tool has answered
             const hostOf = (u) => String(u || '').replace(/^http:\/\//, '').replace(/\/\?pin=\d+$/, '');
+            const waking = !s && now - visibleSince < 8000;
             return {
-                state: !s ? 'down' : !s.compatible ? 'bad' : 'ok', error: s && s.error, url: s && s.url, host: s && hostOf(s.url), pin: s && s.pin,
+                state: !s ? 'down' : !s.compatible ? 'bad' : 'ok', waking, error: s && s.error, url: s && s.url, host: s && hostOf(s.url), pin: s && s.pin,
                 slots: s && s.compatible ? s.slots : [], more: s && s.compatible ? (s.more || []) : [], thumbs, message: s && s.message, messageKind: s && s.messageKind,
                 needsRestart: !!(s && s.needsRestart), carWhere: s && s.carWhere, armed, note, noteKind, busy: !!(s && s.busy), backup: s && s.backup,
                 anyChanged: !!(s && (s.anyChanged || (s.slots || []).some((x) => x.changed))), version,
@@ -165,7 +169,7 @@ mgu.run({
                 if (at.over && playing) { playing = ''; m.playing = ''; at = where(Date.now()); }
                 m.pv = { player: pv, kind: at.kind, f: at.f, w: pv.w, h: pv.h };
             } else if (mode === 'preview') mode = m.mode = 'main';
-            const key = JSON.stringify([m.state, m.error, m.url, m.pin, m.slots, m.more, thumbRev, m.message, m.messageKind, m.needsRestart, m.busy, m.anyChanged, m.carWhere, m.armed, m.note, vis, m.mode, m.draft, m.pvReady, m.playing, at && at.kind, at && at.f]);
+            const key = JSON.stringify([m.state, m.waking, m.error, m.url, m.pin, m.slots, m.more, thumbRev, m.message, m.messageKind, m.needsRestart, m.busy, m.anyChanged, m.carWhere, m.armed, m.note, vis, m.mode, m.draft, m.pvReady, m.playing, at && at.kind, at && at.f]);
             if (key === lastKey && shown) return;
             lastKey = key; shown = true;
             const cv = ctx.canvas(UI.W, UI.H) || new Canvas(UI.W, UI.H);

@@ -110,12 +110,13 @@ mgu.run({
         const nightAt = (now) => { const h = new Date(now).getHours(); return h >= 18 || h < 6; };
 
         const cfg = (now) => {
+            const t = now || Date.now();
             const o = {};
             settings.schema.forEach((s) => { o[s.key] = settings.get(s.key); });
             EXTRA.forEach((k) => { o[k] = settings.get(k); });
-            if (o.nightRim === 'dim' || o.nightRim === 'bright') o.night = nightAt(now || Date.now());
-            if (dragCam && Date.now() - dragCam.at > 10000) dragCam = null;
-            if (dragSign && Date.now() - dragSign.at > 10000) dragSign = null;
+            if (o.nightRim === 'dim' || o.nightRim === 'bright') o.night = nightAt(t);
+            if (dragCam && t - dragCam.at > 10000) dragCam = null;
+            if (dragSign && t - dragSign.at > 10000) dragSign = null;
             if (dragCam) { o.gaugeDx = dragCam.dx; o.gaugeDy = dragCam.dy; o.place = 'gauge'; }
             return o;
         };
@@ -278,9 +279,9 @@ mgu.run({
         function buildSignPayload(s) {
             return {
                 mode: s.signMode, show: s.signShow, empty: s.signEmpty, frontcam: s.signFrontcam,
-                side: s.signSide, hudSide: s.signHudSide, size: s.signSize, camera: s.signCamera,
-                bmwmap: s.signBmwMap, minLimit: s.signMinLimit, screen: s.signScreen, warn: s.signWarn,
-                probe: s.signProbe, mapX: s.signMapX, mapY: s.signMapY, hudX: s.signHudX, hudY: s.signHudY,
+                side: s.signSide, hudSide: s.signHudSide, size: s.signSize, source: s.signSource,
+                camera: s.signCamera, bmwmap: s.signBmwMap, minLimit: s.signMinLimit, screen: s.signScreen,
+                warn: s.signWarn, probe: s.signProbe, mapX: s.signMapX, mapY: s.signMapY, hudX: s.signHudX, hudY: s.signHudY,
             };
         }
 
@@ -416,10 +417,11 @@ mgu.run({
             const signMap = dragSign && dragSign.t === 'map' ? Object.assign({}, geoMapBase, { x: dragSign.x, y: dragSign.y, placed: true }) : geoMapBase;
             const signHud = dragSign && dragSign.t === 'hud' ? Object.assign({}, geoHudBase, { x: dragSign.x, y: dragSign.y, placed: true }) : geoHudBase;
 
+            const frontShort = { off: s.ar === 'off' ? 'tắt' : 'theo AR', slow30: '< 30 km/h', slow60: '< 60 km/h', always: 'luôn bật' };
             const v = {
                 page, posMode, edit, signEditing,
                 enabled: s.enabled !== 'off', round: s.shape !== 'square', gauge: s.place === 'gauge' || s.place === undefined,
-                sizeLabel: label('size'), front: String(label('front')).toLowerCase(),
+                sizeLabel: label('size'), front: frontShort[s.front] || 'tắt',
                 signOn: s.signMode !== 'off', signEmpty: s.signEmpty, signShowLabel: label('signShow'),
                 signShowShort: s.signShow === 'cluster' ? 'Đồng hồ' : s.signShow === 'hud' ? 'HUD' : 'Cả hai',
                 signSizeLabel: label('signSize'),

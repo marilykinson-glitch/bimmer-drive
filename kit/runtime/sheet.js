@@ -28,7 +28,7 @@ function pill(r, t, x, y, w, h, label, on, opts) {
     const c = o.color || S;
     r.roundRect(x, y, w, h, h / 2, on ? withAlpha(c, 0.9) : withAlpha('#ffffff', 0.08));
     if (!on) r.strokeRoundRect(x, y, w, h, h / 2, 1.5, withAlpha(o.color || '#ffffff', o.color ? 0.7 : 0.22));
-    r.text(label, x + w / 2, y + h / 2 + 9, 24, on ? '#ffffff' : o.color || t.text, { align: 'center', font: 'bold', spacing: 1 });
+    r.text(translate(String(label)), x + w / 2, y + h / 2 + 9, 24, on ? '#ffffff' : o.color || t.text, { align: 'center', font: 'bold', spacing: 1 });
 }
 function toggle(r, t, x, y, on) {
     const S = t.sel || t.accent, w = 76, h = 38;
@@ -138,12 +138,13 @@ function listSheet(settings, title, opts) {
         },
         draw(r, t) {
             r.clear(t.bg);
-            const rows = this.rows();
+            let rows = this.rows();
+            if (!this.open && this.group && !rows.length) { this.group = null; this.focus = Math.max(0, this.gfocus); rows = this.rows(); }
             // a switch that hid settings below the focus ("when"): the focus stays on the list
             if (!this.open) this.focus = Math.min(this.focus, rows.length - 1);
             // the header's tab names the sheet; a value list names its setting here
-            if (this.open || this.group) r.text(this.open ? this.open.label : this.group, 44, TOP + 40, 32, t.text, { font: 'bold' });
-            else if (version) r.text('Version ' + version, 44, TOP + 38, 24, t.dim);
+            if (this.open || this.group) r.text(fit(r, this.open ? this.open.label : this.group, 32, W - 240, 'bold'), 44, TOP + 40, 32, t.text, { font: 'bold' });
+            else if (version) r.text(translate('Version') + ' ' + version, 44, TOP + 38, 24, t.dim);
             const targets = [];
             // Back (a value list) / Done (the settings): top right
             const bw = 150, bx = W - 40 - bw, by = TOP + 8;
