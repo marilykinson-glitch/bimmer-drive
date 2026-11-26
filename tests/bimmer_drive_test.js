@@ -72,9 +72,17 @@ function ok(cond, msg) {
     ok(gNull.placed === false && gNull.x > 500 && gUndef.placed === false && gNull.x === gUndef.x, 'signGeometry ignores null/undefined saved coordinates cleanly');
 }
 
-/* ---- 2. Streamlined 5-Row Grouped Settings Menu (`app.json` + `sheet.js`) ---- */
+/* ---- 2. Streamlined 5-Row Grouped Settings Menu & Manifest Validation (`app.json` + `sheet.js`) ---- */
 {
     const spec = JSON.parse(fs.readFileSync(path.join(__dirname, '../apps/bimmer_drive/app.json'), 'utf8'));
+    ok(spec.startType === 'autostart', 'bimmer_drive declares startType=autostart so turn signals work immediately on car boot');
+    ok((spec.screens[0].buttons || []).some((b) => b[0] === 'BTN_SETTINGS'), 'MAIN screen declares BTN_SETTINGS so GPU header renders CÀI ĐẶT tab');
+    ok(spec.signals['de.bmw.body.Light'].StatusFunctionsIndicators === 's' && spec.signals['de.bmw.body.Light'].StatusFunctionsIndicators2 === 's',
+        'Light indicators use subscribe-only ("s") matching MGU getterless SOME/IP fields');
+    ok(spec.signals['de.bmw.infrastructure.VehicleInformation'].statusGearboxDrive === 's' && spec.signals['de.bmw.infrastructure.VehicleInformation'].DataPowerTrain2 === 's',
+        'Gearbox signals use subscribe-only ("s") matching MGU getterless SOME/IP fields');
+    ok(spec.signals['de.bmw.infotainment.video.cameraproxy.ICAM2Proxy'] === '*' && spec.signals['de.bmw.dass.XView3D'] === '*',
+        'Camera proxies use "*" wildcard for cross-SP18/SP21 compatibility');
     const vals = {};
     spec.settings.forEach((s) => { vals[s.key] = s.default; });
     const mockSettings = {
@@ -253,8 +261,8 @@ async function runIntegration() {
     // Pre-populate leftover stale file in compatDir to verify ensureCompatSymlink replaces leftover directory cleanly
     fs.writeFileSync(path.join(compatDir, 'status.json'), '{}');
 
-    fs.writeFileSync(path.join(appRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'bimmer_drive', version: '1.0.1' }));
-    fs.writeFileSync(path.join(anhRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'anh_dai_dien', version: '1.0.1' }));
+    fs.writeFileSync(path.join(appRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'bimmer_drive', version: '1.0.2' }));
+    fs.writeFileSync(path.join(anhRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'anh_dai_dien', version: '1.0.2' }));
     fs.writeFileSync(path.join(wocRun, 'status.json'), JSON.stringify({ state: 'starting', reason: 'under an alert on the cluster', target: 'map', cluster: 1, hud: 1, hud_state: 'showing', hide_bmw_guidance: 1 }));
 
     const fakeCrPath = path.join(tmp, 'fake_cr_client.js');
@@ -320,8 +328,8 @@ setInterval(() => {
     await sleep(300);
 
     const st0 = JSON.parse(fs.readFileSync(path.join(runDir, 'status.json'), 'utf8'));
-    ok(st0.version === '1.0.1' && st0.symbol === '---' && st0.shown.indexOf('map') >= 0, 'OEM --- sign shown while waze-on-cluster is suspended under alert');
-    ok(fs.lstatSync(compatDir).isSymbolicLink() && JSON.parse(fs.readFileSync(path.join(compatDir, 'status.json'), 'utf8')).version === '1.0.1', 'leftover /run/vietmap-signs directory replaced cleanly with symlink');
+    ok(st0.version === '1.0.2' && st0.symbol === '---' && st0.shown.indexOf('map') >= 0, 'OEM --- sign shown while waze-on-cluster is suspended under alert');
+    ok(fs.lstatSync(compatDir).isSymbolicLink() && JSON.parse(fs.readFileSync(path.join(compatDir, 'status.json'), 'utf8')).version === '1.0.2', 'leftover /run/vietmap-signs directory replaced cleanly with symlink');
 
     const code = st0.pairing.code;
     ok(/^\d{6}$/.test(code), '6-digit pairing code generated');

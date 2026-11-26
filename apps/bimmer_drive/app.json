@@ -2,43 +2,28 @@
   "id": "bimmer_drive",
   "title": "Camera & VietMap",
   "description": "Tích hợp 3-trong-1 mượt mà cho BMW MGU iDrive 7: Camera xi nhan trong vòng đồng hồ, Camera trước kèm mũi tên dẫn đường AR, Biển báo tốc độ Việt Nam (VietMap Live + Camera KAFAS + Bản đồ BMW, kèm biển --- chuẩn hãng và vẽ trực tiếp lên Camera trước) và Chiếu màn hình giữa lên đồng hồ.",
-  "version": "1.0.1",
+  "version": "1.0.2",
+  "startType": "autostart",
   "vendor": "custom",
   "loggingId": "OBDR",
   "fullscreen": true,
   "signals": {
     "de.bmw.body.Light": {
-      "StatusFunctionsIndicators": "rs",
-      "StatusFunctionsIndicators2": "rs"
+      "StatusFunctionsIndicators": "s",
+      "StatusFunctionsIndicators2": "s"
     },
     "de.bmw.infotainment.vehicle.Vehicle2": {
+      "_optional": "the car's speed: the speed limit setting does nothing then",
       "statusCarSpeed2": "rs"
     },
     "de.bmw.infrastructure.VehicleInformation": {
-      "_optional": true,
-      "statusGearboxDrive": "rs",
-      "DataPowerTrain2": "rs"
+      "_optional": "instant reverse gear release so the rear-view camera never waits",
+      "statusGearboxDrive": "s",
+      "DataPowerTrain2": "s"
     },
-    "de.bmw.infotainment.video.cameraproxy.ICAM2Proxy": {
-      "_optional": true,
-      "currentState": "rs",
-      "_methods": [
-        "clientAttach",
-        "clientDetach",
-        "changeState"
-      ]
-    },
-    "de.bmw.infotainment.video.cameraproxy.CameraProxy": {
-      "_optional": true,
-      "_methods": [
-        "clientAttach",
-        "clientDetach"
-      ]
-    },
-    "de.bmw.dass.XView3D": {
-      "_optional": true,
-      "CurrentState": "rs"
-    }
+    "de.bmw.infotainment.video.cameraproxy.ICAM2Proxy": "*",
+    "de.bmw.infotainment.video.cameraproxy.CameraProxy": "*",
+    "de.bmw.dass.XView3D": "*"
   },
   "screens": [
     {
@@ -61,6 +46,10 @@
         [
           "BTN_SIGN",
           "Biển báo"
+        ],
+        [
+          "BTN_SETTINGS",
+          "Cài đặt"
         ]
       ]
     }

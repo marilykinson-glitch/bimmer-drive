@@ -30,7 +30,7 @@ const signread = require('./signread');
 const signsCam = require('./signs-cam');
 const wocMirror = require('./woc-mirror');
 
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 const env = (k, d) => (process.env[k] !== undefined && process.env[k] !== '' ? process.env[k] : d);
 
 const CFG = {

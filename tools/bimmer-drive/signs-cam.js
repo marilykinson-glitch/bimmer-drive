@@ -563,8 +563,12 @@ function start(st, o) {
                 continue;
             }
             if (!picked.dart) continue;
+            const rawFields = (db.interfaces && db.interfaces[iface.name] && db.interfaces[iface.name].fields) || {};
             const attributes = {};
-            fNames.forEach((k) => { attributes[picked[k]] = 'rs'; });
+            fNames.forEach((k) => {
+                const fd = rawFields[picked[k]] || {};
+                attributes[picked[k]] = (fd.noGetter || fd.getter === null) ? 's' : 'rs';
+            });
             let cfg;
             try { cfg = await generateTarget(Object.assign({}, o, { dbCache: db }), 'nav_' + (idx++), { iface: iface.name, instances: '*', attributes }); } catch (e) {
                 nav.proxies.push('failed ' + iface.name.split('.').pop() + ': ' + String(e.message || e).slice(0, 120));
