@@ -244,4 +244,17 @@ function png(rgba, w, h) {
     return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw, { level: 6 })), chunk('IEND', Buffer.alloc(0))]);
 }
 
-module.exports = { SIZE, RAW, HEAD, Bundle, selfTest, lz4Compress, lz4Decompress, flipRows, resize, fit, place, shrink, png, crc32 };
+/** Whether entry `key` in `bundle` was compressed by our greedy `lz4Compress` (vs BMW's offline `LZ4_HC`). */
+function isOurEncoded(bundle, key, allowTest) {
+    if (!bundle || !bundle.byKey || !bundle.byKey[key]) return false;
+    if (!allowTest && bundle.data.slice(0, 64).indexOf('[GitHash:test]') >= 0) return false;
+    try {
+        const e = bundle.byKey[key];
+        const stored = bundle.data.slice(e.off + HEAD, e.off + HEAD + e.comp);
+        const raw = lz4Decompress(stored, e.dec);
+        const re = lz4Compress(raw);
+        return re.length === stored.length && Buffer.compare(re, stored) === 0;
+    } catch (e) { return false; }
+}
+
+module.exports = { SIZE, RAW, HEAD, Bundle, selfTest, isOurEncoded, lz4Compress, lz4Decompress, flipRows, resize, fit, place, shrink, png, crc32 };

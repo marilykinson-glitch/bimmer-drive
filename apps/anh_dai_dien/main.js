@@ -68,12 +68,14 @@ mgu.run({
             if (vis && !wasVis) visibleSince = now;
             wasVis = vis;
             if (vis) pingWake(now);
-            if (now - readAt < 700) return;
+            const pollGap = (!status || status.starting) ? 300 : 700;
+            if (now - readAt < pollGap) return;
             readAt = now;
             let s = null;
             try { s = JSON.parse(fs.readFileSync(path.join(RUN, 'status.json'), 'utf8')); } catch (e) { s = null; }
-            status = s && typeof s.at === 'number' && Math.abs(now - s.at) < STALE_MS ? s : null;
-            if (status && status.rev !== thumbRev && status.compatible) {
+            const maxAge = s && s.starting ? 25000 : STALE_MS;
+            status = s && typeof s.at === 'number' && Math.abs(now - s.at) < maxAge ? s : null;
+            if (status && !status.starting && status.rev !== thumbRev && status.compatible) {
                 // the small pictures for the cards: the car and the start-up screen (144 wide, or 48 from an older helper),
                 // and three profile pictures (96 x 96 from the tool) smoothly scaled to 52 x 52
                 const t = {}, file = (name) => { try { return fs.readFileSync(path.join(RUN, name)); } catch (e) { return null; } };
@@ -150,9 +152,10 @@ mgu.run({
             if (armed && now - armedAt >= ARM_MS) armed = '';
             if (note && !armed && (now - noteAt > NOTE_MS || (s && String(s.message) !== noteOver))) note = '';      // the tool has answered
             const hostOf = (u) => String(u || '').replace(/^http:\/\//, '').replace(/\/\?pin=\d+$/, '');
-            const waking = !s && now - visibleSince < 8000;
+            const starting = !!(s && s.starting);
+            const waking = (!s || starting) && now - visibleSince < 30000;
             return {
-                state: !s ? 'down' : !s.compatible ? 'bad' : 'ok', waking, error: s && s.error, url: s && s.url, host: s && hostOf(s.url), pin: s && s.pin,
+                state: !s ? 'down' : starting ? 'starting' : !s.compatible ? 'bad' : 'ok', waking, error: s && s.error, url: s && s.url, host: s && hostOf(s.url), pin: s && s.pin,
                 slots: s && s.compatible ? s.slots : [], more: s && s.compatible ? (s.more || []) : [], thumbs, message: s && s.message, messageKind: s && s.messageKind,
                 needsRestart: !!(s && s.needsRestart), carWhere: s && s.carWhere, armed, note, noteKind, busy: !!(s && s.busy), backup: s && s.backup,
                 anyChanged: !!(s && (s.anyChanged || (s.slots || []).some((x) => x.changed))), version,

@@ -30,7 +30,7 @@ const signread = require('./signread');
 const signsCam = require('./signs-cam');
 const wocMirror = require('./woc-mirror');
 
-const VERSION = '1.0.2';
+const VERSION = '1.0.3';
 const env = (k, d) => (process.env[k] !== undefined && process.env[k] !== '' ? process.env[k] : d);
 
 const CFG = {
@@ -810,7 +810,8 @@ function checkAnhOnDemand(now) {
     const wakeAt = Number(w.j.at) || w.mtime;
     if (now - wakeAt > 8000 || now < wakeAt - 5000) return;
     const st = readJson(path.join(CFG.anhRun, 'status.json'));
-    if (st && typeof st.at === 'number' && Math.abs(now - st.at) < 5000) return;
+    const maxStale = st && st.starting ? 25000 : 5000;
+    if (st && typeof st.at === 'number' && Math.abs(now - st.at) < maxStale) return;
     anhWakeTriedAt = now;
     log('anh-dai-dien: waking on demand (MGU Studio opened)');
     cp.execFile(CFG.systemctl, ['start', CFG.anhUnit], { timeout: 10000 }, (err) => {

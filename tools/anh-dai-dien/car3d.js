@@ -187,4 +187,28 @@ function patchBitmaps(bitmaps, rgba) {
     return bitmaps.build(replace);
 }
 
-module.exports = { BODY, TEXTURE, KEEP, PW, PH, SIDE, hide, marks, billboard, cacheNames, photo, pack, check, patchEffects, patchBitmaps };
+/** Whether `effects` was already patched by `patchEffects` (`pc_uv` billboard shader present). */
+function isPatched(effects) {
+    try { return !!(effects && effects.has(BODY) && /\bpc_uv\b/.test(effects.shaders(BODY).vertex)); } catch (e) { return false; }
+}
+
+function unpatchShader(src) {
+    return String(src || '')
+        .replace(/(?:out|in) mediump vec2 pc_uv;\n/, '')
+        .replace(/\tvec3 pc_m = vec3\([\s\S]*?(?=\}\s*$)/, '')
+        .replace(/\tif \(pc_uv\.x < 0\.[\s\S]*?(?=\}\s*$)/, '')
+        .replace(/\tgl_Position = vec4\(2\., 2\., 2\., 1\.\);\n(?=\}\s*$)/, '');
+}
+
+function unpatchEffects(effects) {
+    const replace = {};
+    Object.keys(effects.byName).forEach((name) => {
+        if (KEEP.test(name)) return;
+        const s = effects.shaders(name);
+        const nv = unpatchShader(s.vertex), nf = unpatchShader(s.fragment);
+        if (nv !== s.vertex || nf !== s.fragment) replace[name] = effects.effectBlob(name, nv, nf);
+    });
+    return Object.keys(replace).length ? new (effects.constructor)(effects.build(replace), Object.keys(effects.byName).map((n) => '0x' + Buffer.concat([Buffer.from(effects.byName[n].id.slice(0, 8)).reverse(), Buffer.from(effects.byName[n].id.slice(8)).reverse()]).toString('hex') + ' ' + n).join('\n')) : effects;
+}
+
+module.exports = { BODY, TEXTURE, KEEP, PW, PH, SIDE, hide, marks, billboard, cacheNames, photo, pack, check, isPatched, unpatchShader, unpatchEffects, patchEffects, patchBitmaps };

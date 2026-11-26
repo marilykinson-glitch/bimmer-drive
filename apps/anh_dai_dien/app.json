@@ -2,7 +2,7 @@
   "id": "anh_dai_dien",
   "title": "MGU Studio",
   "description": "Đặt ảnh của bạn lên màn hình xe: hình chiếc xe trong menu Xe của tôi và ở màn hình chính, màn hình khởi động có chuyển động, ảnh đại diện của hồ sơ người lái, cùng ảnh bìa mặc định khi phát nhạc và ảnh người gọi. Quét mã QR, chọn ảnh trên điện thoại, rồi bấm Khởi động lại ngay trên màn hình xe. Chế độ Ngủ Đông thông minh: trợ thủ chỉ thức dậy khi bạn mở MGU Studio và tự tắt sạch (0 MB RAM, 0% CPU) khi lái xe.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "vendor": "custom",
   "loggingId": "OAAD",
   "signals": {},

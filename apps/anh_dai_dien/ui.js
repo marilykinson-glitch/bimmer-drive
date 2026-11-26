@@ -247,17 +247,19 @@ function draw(cv, G, t, v, act) {
         cv.text(String(v.pin || '').split('').join(' '), qx, top + (side || 259) + 86, 54, t.text, { literal: true, align: 'center', font: 'bold', spacing: 3 });
         cv.text(v.host || '', qx, top + (side || 259) + 114, 14, G.withAlpha('#ffffff', 0.35), { literal: true, align: 'center', font: 'label' });
     } else {
+        const isWait = v.state === 'starting' || (v.state === 'down' && v.waking);
         cv.roundRect(lx, top, 259, 259, 18, G.withAlpha('#ffffff', 0.05));
-        cv.strokeRoundRect(lx, top, 259, 259, 18, 1.5, v.state === 'down' && v.waking ? G.withAlpha(acc, 0.5) : G.withAlpha('#ffffff', 0.2));
-        cv.text(v.state === 'down' ? (v.waking ? 'ĐANG BẬT TRỢ THỦ…' : 'CHƯA CÓ TRỢ THỦ') : v.state === 'bad' ? 'KHÔNG DÙNG ĐƯỢC' : 'CHƯA CÓ MẠNG', lx + 130, top + 138, 18, v.state === 'down' && v.waking ? acc : t.dim, { literal: true, align: 'center', font: 'bold', spacing: 1.5 });
+        cv.strokeRoundRect(lx, top, 259, 259, 18, 1.5, isWait ? G.withAlpha(acc, 0.55) : G.withAlpha('#ffffff', 0.2));
+        cv.text(v.state === 'starting' ? 'ĐANG ĐỌC GÓI ẢNH…' : v.state === 'down' ? (v.waking ? 'ĐANG BẬT TRỢ THỦ…' : 'CHƯA CÓ TRỢ THỦ') : v.state === 'bad' ? 'KHÔNG DÙNG ĐƯỢC' : 'CHƯA CÓ MẠNG', lx + 130, top + 138, 18, isWait ? acc : t.dim, { literal: true, align: 'center', font: 'bold', spacing: 1.5 });
     }
 
     // right: title, state, how to
     const rx = 460, rw = W - 64 - rx;
     cv.text('MGU STUDIO', rx, G.TOP + 76, 40, t.text, { literal: true, font: 'bold', spacing: 3 });
-    const stateText = v.state === 'down' ? (v.waking ? 'Đang đánh thức trợ thủ (chế độ tiết kiệm RAM)…' : 'Trợ thủ chưa chạy: khởi động lại màn hình xe') : v.state === 'bad' ? (v.error || 'Gói ảnh của xe này chưa dùng được')
-        : !v.url ? 'Xe chưa vào mạng Wi-Fi nào: nối Wi-Fi hoặc điểm phát sóng của điện thoại' : v.busy ? 'Đang ghi vào xe…' : 'Sẵn sàng';
-    const stateKind = v.state === 'ok' && v.url ? (v.busy ? 'warn' : 'go') : (v.state === 'down' && v.waking ? 'dim' : 'warn');
+    const stateText = v.state === 'starting' ? 'Đang đọc dữ liệu hình ảnh trên xe, chờ giây lát…'
+        : v.state === 'down' ? (v.waking ? 'Đang đánh thức trợ thủ (chế độ tiết kiệm RAM)…' : 'Trợ thủ chưa chạy: khởi động lại màn hình xe') : v.state === 'bad' ? (v.error || 'Gói ảnh của xe này chưa dùng được')
+            : !v.url ? 'Xe chưa vào mạng Wi-Fi nào: nối Wi-Fi hoặc điểm phát sóng của điện thoại' : v.busy ? 'Đang ghi vào xe…' : 'Sẵn sàng';
+    const stateKind = v.state === 'ok' && v.url ? (v.busy ? 'warn' : 'go') : (v.state === 'starting' || (v.state === 'down' && v.waking) ? 'dim' : 'warn');
     const note = 'Tuỳ biến hình ảnh MGU ID7', nx = rx + cv.textWidth('MGU STUDIO', 40, { literal: true, font: 'bold', spacing: 3 }) + 20;
     cv.text(note, nx, G.TOP + 76, 18, t.dim, { literal: true, font: 'label' });
     const sx = nx + cv.textWidth(note, 18, { literal: true, font: 'label' }) + 30;

@@ -50,10 +50,11 @@ const { Res } = require('./res');
 const CAR3D = require('./car3d');
 const CARPAINT = require('./carpaint');
 
-const VERSION = '1.0.2';
+const VERSION = '1.0.3';
 const env = (k, d) => (process.env[k] !== undefined && process.env[k] !== '' ? process.env[k] : d);
 const AVATAR_REL = 'High/2D/Baukasten/ContentElements/illustrations/Static/Avatar/MyVehicle_Avatar';
 const REPL_REL = 'High/2D/Baukasten/ContentElements/illustrations/Replacement/4_sizes/';
+const DEFAULT_MOUNT = process.env.AVATAR_MOUNT !== undefined ? process.env.AVATAR_MOUNT : '/mnt/dataro';
 const CFG = {
     root: env('AVATAR_ROOT', '/mnt/dataro/dataro1/hmi/bmw/id7/assetDB'),
     // <model>/vehicle (3D), vehicle2D_big, vehicle2D_small; one folder per brand (BMW, BMW M: an M5 is bmwm/.../F90LCI), ':' between them
@@ -69,8 +70,10 @@ const CFG = {
     fwMs: Number(env('AVATAR_FW_MS', 30000)),
     variant: env('AVATAR_VARIANT', '/run/etc/variant.env'),             // HWGEN=18: which mgu<gen> folder this head unit plays
     dir: env('AVATAR_DIR', ''),                         // the profile pictures' bundle, if not under the root (tests)
-    mount: process.env.AVATAR_MOUNT !== undefined ? process.env.AVATAR_MOUNT : '/mnt/dataro',   // '' = nothing to remount (tests)
+    mount: DEFAULT_MOUNT,                               // '' = nothing to remount (tests)
     state: env('AVATAR_STATE', '/var/opt/anh-dai-dien'),
+    vault: process.env.AVATAR_VAULT !== undefined ? process.env.AVATAR_VAULT : (DEFAULT_MOUNT ? '/var/opt/mgu-studio-vault' : ''),
+    detectOrphans: env('AVATAR_DETECT_ORPHANS', ''),
     shaders: env('AVATAR_SHADERS', '/var/opt/target/shader-cache'),
     // BMW's own way first (the node state manager, as the Store's tools ask for a restart), then systemd's
     reboot: env('AVATAR_REBOOT', 'sync; /usr/bin/nsm_control --requestRestart 7 --normal || systemctl reboot || /sbin/reboot || reboot'),
@@ -130,12 +133,20 @@ function log(m) {
 // A slot (one picture the owner sets): { n, label, where, w, h (what the phone sends), alpha (its transparency is kept),
 //   targets: [{ b, key, w, h, box, zero (this picture is emptied: a paint mask) }] }.
 const S = {
-    ipIndex: 0, bundles: {}, slots: {}, startChanged: false, carChanged: false, hero: null, compatible: false, error: '', backupNote: '', smallIcons: false,
+    ipIndex: 0, bundles: {}, slots: {}, startChanged: false, startUnbacked: false, carChanged: false, carUnbacked: false,
+    hero: null, compatible: false, starting: false, error: '', backupNote: '', smallIcons: false,
     thumbs: {}, rev: 0, busy: false, message: '', messageKind: 'dim', needsRestart: false, pin: '', port: 0, startedAt: Date.now(),
 };
 let queue = Promise.resolve();
 const bad = (m) => { const e = new Error(m); e.bad = true; return e; };
 const exclusive = (fn) => { const p = queue.then(fn, fn); queue = p.then(() => {}, () => {}); return p; };
+const shouldDetectOrphans = () => !!(CFG.mount || CFG.detectOrphans === '1');
+const vaultFile = (rel) => (CFG.vault ? path.join(CFG.vault, 'backup', rel) : '');
+function syncToVault(srcFile, rel) {
+    const vf = vaultFile(rel);
+    if (!vf || fs.existsSync(vf)) return;
+    try { mkdirp(path.dirname(vf)); fs.writeFileSync(vf + '.tmp', fs.readFileSync(srcFile)); fs.renameSync(vf + '.tmp', vf); } catch (e) {}
+}
 
 const newPin = () => String(1000 + crypto.randomBytes(2).readUInt16BE(0) % 9000);
 
@@ -146,17 +157,17 @@ const readBundle = (b) => new W.Bundle(fs.readFileSync(RES(b)), b.ids);
 const readOriginal = (b) => new W.Bundle(fs.readFileSync(b.bk), b.ids);
 
 function bundle(id, dir, bkName, file) {
-    const b = { id, dir, file: file || 'wbitmaps.res', bk: path.join(CFG.state, 'backup', bkName), ids: '', usable: false, error: '', changed: {}, note: '' };
+    const b = { id, dir, bkName, file: file || 'wbitmaps.res', bk: path.join(CFG.state, 'backup', bkName), ids: '', usable: false, error: '', changed: {}, unbacked: {}, note: '' };
     S.bundles[id] = b;
     return b;
 }
 
 /** Reads a bundle, checks it is the layout this knows and has the pictures `want` ([{ key, w, h }]) at those sizes. */
-function check(b, want) {
+function check(b, want, fast) {
     let data;
     try { data = fs.readFileSync(RES(b)); b.ids = fs.readFileSync(RES(b) + '.ids', 'utf8'); } catch (e) { b.error = 'không đọc được gói ảnh: ' + e.message; b.missing = e.code === 'ENOENT'; return null; }
     let parsed;
-    try { parsed = W.selfTest(data, b.ids); } catch (e) { b.error = 'gói ảnh có cấu trúc lạ (' + e.message + ')'; return null; }
+    try { parsed = (fast && fs.existsSync(b.bk)) ? new W.Bundle(data, b.ids) : W.selfTest(data, b.ids); } catch (e) { b.error = 'gói ảnh có cấu trúc lạ (' + e.message + ')'; return null; }
     for (let i = 0; i < want.length; i++) {
         const e = parsed.byKey[want[i].key];
         if (!e) { b.error = 'thiếu hình ' + want[i].key; return null; }
@@ -165,22 +176,54 @@ function check(b, want) {
     return parsed;
 }
 
-/** The bundle's original, copied once (from `legacy` if that is a copy the owner made); then which pictures differ from it. */
-function backup(b, current, legacy) {
-    let orig = null;
-    try { orig = readOriginal(b); b.note = 'đã có bản gốc'; } catch (e) { orig = null; }
-    if (!orig) {
-        let from = RES(b); orig = current; b.note = 'bản gốc lấy từ gói hiện tại';
-        if (legacy) { try { orig = new W.Bundle(fs.readFileSync(legacy), b.ids); from = legacy; b.note = 'bản gốc do chủ xe sao lưu tay'; } catch (e) { orig = current; } }
+/** The bundle's original, copied once (from vault or `legacy` first); also detects entries replaced prior to an uninstall. */
+function backup(b, current, legacy, orphanKeys) {
+    let origBytes = null;
+    try { origBytes = fs.readFileSync(b.bk); b.note = 'đã có bản gốc'; } catch (e) { origBytes = null; }
+    if (!origBytes) {
+        const vf = vaultFile(b.bkName);
+        if (vf) {
+            try {
+                const vb = fs.readFileSync(vf);
+                new W.Bundle(vb, b.ids);
+                mkdirp(path.dirname(b.bk));
+                fs.writeFileSync(b.bk + '.tmp', vb);
+                fs.renameSync(b.bk + '.tmp', b.bk);
+                origBytes = vb;
+                b.note = 'khôi phục bản gốc từ két an toàn';
+                log('backup ' + b.id + ': restored from vault (' + vf + ')');
+            } catch (e) { origBytes = null; }
+        }
+    }
+    if (!origBytes) {
+        let from = RES(b); b.note = 'bản gốc lấy từ gói hiện tại';
+        if (legacy) { try { new W.Bundle(fs.readFileSync(legacy), b.ids); from = legacy; b.note = 'bản gốc do chủ xe sao lưu tay'; } catch (e) {} }
         try {
+            origBytes = fs.readFileSync(from);
             mkdirp(path.dirname(b.bk));
-            fs.writeFileSync(b.bk + '.tmp', fs.readFileSync(from));
+            fs.writeFileSync(b.bk + '.tmp', origBytes);
             fs.renameSync(b.bk + '.tmp', b.bk);
             log('backup ' + b.id + ': ' + b.note + ' (' + from + ')');
         } catch (e) { b.error = 'không sao lưu được: ' + e.message; log('backup ' + b.id + ' failed: ' + e.message); return false; }
     }
     b.changed = {};
-    current.entries.forEach((e) => { if (!orig.byKey[e.key] || Buffer.compare(current.blob(e.key), orig.blob(e.key)) !== 0) b.changed[e.key] = true; });
+    b.unbacked = {};
+    const sameFile = Buffer.compare(current.data, origBytes) === 0;
+    let orig = null;
+    if (!sameFile) {
+        try { orig = new W.Bundle(origBytes, b.ids); } catch (e) { b.error = 'bản sao lưu gốc bị hỏng: ' + e.message; return false; }
+        current.entries.forEach((e) => { if (!orig.byKey[e.key] || Buffer.compare(current.blob(e.key), orig.blob(e.key)) !== 0) b.changed[e.key] = true; });
+    }
+    if (shouldDetectOrphans() && orphanKeys && orphanKeys.length) {
+        const allowTest = CFG.detectOrphans === '1';
+        orphanKeys.forEach((k) => {
+            if (!b.changed[k] && W.isOurEncoded(current, k, allowTest)) {
+                if (b.allOrNothing) current.entries.forEach((e) => { b.changed[e.key] = true; b.unbacked[e.key] = true; });
+                else { b.changed[k] = true; b.unbacked[k] = true; }
+            }
+        });
+    }
+    if (!Object.keys(b.unbacked).length) syncToVault(b.bk, b.bkName);
     return true;
 }
 
@@ -263,7 +306,7 @@ function loadCar() {
         if (!fs.existsSync(path.join(dir, 'bitmaps.res'))) return;
         const id = 'car-' + model + '-' + sub.slice(10);
         const b = bundle(id, dir, id + '.res.orig', 'bitmaps.res');
-        const p = check(b, []);
+        const p = check(b, [], true);
         const scene = CARPAINT.readSceneTrims(path.join(dir, 'scene.pbx'));
         // scene.pbx binds each vehicle_hero_Trim<X> to its exact tex0 (picture) and tex1 (mask); fall back to naming convention
         const isMask = (k) => (scene && scene.picOfMask[k] && p && p.byKey[scene.picOfMask[k]] ? true : /_mask\d*_bitmap$/.test(k));
@@ -302,17 +345,19 @@ function loadCar() {
 /** Looks at every bundle and makes the list of pictures that can be set. False if the profile pictures cannot. */
 function load() {
     S.bundles = {}; S.slots = {}; S.thumbs = {}; S.compatible = false; S.error = ''; S.smallIcons = false; S.backupNote = '';
+    S.startUnbacked = false; S.carUnbacked = false;
     const keys = []; for (let n = 1; n <= SLOTS; n++) keys.push(key(n));
     const big = bundle('avatar', CFG.dir || path.join(CFG.root, AVATAR_REL), 'wbitmaps.res.orig');
     const parsed = check(big, keys.map((k) => ({ key: k, w: W.SIZE, h: W.SIZE })));
     if (!parsed) { S.error = big.error; return false; }
-    if (!backup(big, parsed, path.join(CFG.legacy, 'wbitmaps.res.orig'))) { S.error = big.error; return false; }
+    if (!backup(big, parsed, path.join(CFG.legacy, 'wbitmaps.res.orig'), keys)) { S.error = big.error; return false; }
     big.usable = true; S.backupNote = big.note;
     // the two icon bundles: optional, the picker works without them
     const icons = [['avatar-regular', 'icons/Class_regular/MyVehicle_Avatar', 84, 72, [1, 1, 82, 70]], ['avatar-status', 'icons/Class_status/MyVehicle_Avatar', 72, 72, [9, 9, 54, 54]]].map((d) => {
         const b = bundle(d[0], path.join(CFG.root, d[1]), d[0] + '.res.orig');
-        const p = check(b, keys.map((k) => ({ key: k, w: d[2], h: d[3] })));
+        const p = check(b, keys.map((k) => ({ key: k, w: d[2], h: d[3] })), true);
         b.usable = !!(p && backup(b, p));
+        if (b.usable) Object.keys(big.unbacked).forEach((k) => { b.changed[k] = true; b.unbacked[k] = true; });
         if (!b.usable && !b.missing) log(b.id + ' not usable: ' + b.error);
         return { b, w: d[2], h: d[3], box: d[4] };
     });
@@ -326,17 +371,30 @@ function load() {
     // the placeholder pictures: each only if its bundle is on this car and is what is expected
     MORE.forEach((d, i) => {
         const b = bundle(d[0], path.join(CFG.root, REPL_REL + d[0]), d[0] + '.res.orig');
+        b.allOrNothing = true;
         const want = [];
         SIZES4.slice().reverse().forEach((sz) => COLOURS.forEach((c) => want.push({ key: sz + '_' + c, w: sz, h: sz })));
-        const p = check(b, want);
-        b.usable = !!(p && p.entries.length === want.length && backup(b, p));
+        const p = check(b, want, true);
+        b.usable = !!(p && p.entries.length === want.length && backup(b, p, null, [want[want.length - 1].key]));
         if (!b.usable) { if (!b.missing) log(b.id + ' not usable: ' + (b.error || 'other pictures than expected')); return; }
         const n = MORE0 + i;
         S.slots[n] = { n, label: d[1], where: d[2], w: 1305, h: 1305, targets: want.map((w) => ({ b, key: w.key, w: w.w, h: w.h })) };
         thumbFrom(S.slots[n], p);
     });
-    try { loadCar(); } catch (e) { log('2D car pictures: ' + e.message); S.hero = null; }
-    try { loadCar3d(); } catch (e) { log('3D car: ' + e.message); delete S.slots[CAR]; }
+    try { if (S.starting) writeStatus(); loadCar(); } catch (e) { log('2D car pictures: ' + e.message); S.hero = null; }
+    try { if (S.starting) writeStatus(); loadCar3d(); } catch (e) { log('3D car: ' + e.message); delete S.slots[CAR]; }
+    if (shouldDetectOrphans() && S.slots[CAR]) {
+        const picked = pickCarTarget();
+        if (picked && !picked.t.b.changed[picked.t.key]) {
+            try {
+                if (W.isOurEncoded(readBundle(picked.t.b), picked.t.key, CFG.detectOrphans === '1')) {
+                    picked.t.b.changed[picked.t.key] = true;
+                    picked.t.b.unbacked[picked.t.key] = true;
+                    carThumb();
+                }
+            } catch (e) {}
+        }
+    }
     try { loadStart(); } catch (e) { log('start-up screen: ' + e.message); delete S.slots[START]; }
     S.activeSig = activeVehicleInfo().sig;
     S.compatible = true; S.rev++;
@@ -408,7 +466,8 @@ function commit(b, buf) {
 // main menu is not 3D, the 2D pictures (vehicle2D_big and _small). One slot sets both.
 const carMark = () => path.join(CFG.state, 'car3d-changed');
 const carPhoto = () => path.join(CFG.state, 'car-photo.rgba');
-const carBackup = (m, name) => path.join(CFG.state, 'backup', 'car3d', m.model, name);
+const carBackupRel = (m, name) => path.join('car3d', m.model, name);
+const carBackup = (m, name) => path.join(CFG.state, 'backup', carBackupRel(m, name));
 const CAR_FILES = ['effects.res', 'bitmaps.res'];
 const CAR_NEEDS = CAR_FILES.concat(['effects.res.ids', 'bitmaps.res.ids', 'meshes.res', 'meshes.res.attributes']);
 
@@ -417,19 +476,31 @@ function loadCar3d() {
     let models = [];
     models = vehicleDirs();
     S.carChanged = fs.existsSync(carMark());
+    S.carUnbacked = false;
     const found = [], old = [];              // old: changed by an earlier version of this, not a model this one changes: only put back
     models.forEach((v) => {
         const model = v.model, dir = path.join(v.base, 'vehicle');
         const m = { model, dir };
+        CAR_FILES.forEach((f) => {
+            const bk = carBackup(m, f), vf = vaultFile(carBackupRel(m, f));
+            if (!fs.existsSync(bk) && vf && fs.existsSync(vf)) {
+                try { mkdirp(path.dirname(bk)); fs.writeFileSync(bk + '.tmp', fs.readFileSync(vf)); fs.renameSync(bk + '.tmp', bk); } catch (e) {}
+            }
+        });
+        const hasBk = CAR_FILES.every((f) => fs.existsSync(carBackup(m, f)));
         const kept = () => {
-            if (CAR_FILES.every((f) => fs.existsSync(carBackup(m, f)) && fs.existsSync(path.join(dir, f))) &&
+            if (hasBk && CAR_FILES.every((f) => fs.existsSync(path.join(dir, f))) &&
                 CAR_FILES.some((f) => { try { return Buffer.compare(fs.readFileSync(path.join(dir, f)), fs.readFileSync(carBackup(m, f))) !== 0; } catch (e) { return false; } })) old.push(m);
         };
         if (!CAR_NEEDS.every((f) => fs.existsSync(path.join(dir, f)))) return kept();
         try {
+            const liveEff = new Res(fs.readFileSync(path.join(dir, 'effects.res')), fs.readFileSync(path.join(dir, 'effects.res.ids'), 'utf8'));
+            const livePatched = CAR3D.isPatched(liveEff);
+            if (livePatched && !S.carChanged) { S.carChanged = true; if (!hasBk) S.carUnbacked = true; }
             // what the model is, is read from its originals: the files on the car may be this tool's
-            const from = S.carChanged && CAR_FILES.every((f) => fs.existsSync(carBackup(m, f))) ? path.dirname(carBackup(m, 'effects.res')) : dir;
-            const eff = new Res(fs.readFileSync(path.join(from, 'effects.res')), fs.readFileSync(path.join(dir, 'effects.res.ids'), 'utf8'));
+            const from = (S.carChanged && hasBk) ? path.dirname(carBackup(m, 'effects.res')) : dir;
+            const rawEff = from === dir ? liveEff : new Res(fs.readFileSync(path.join(from, 'effects.res')), fs.readFileSync(path.join(dir, 'effects.res.ids'), 'utf8'));
+            const eff = CAR3D.isPatched(rawEff) ? CAR3D.unpatchEffects(rawEff) : rawEff;
             const bmp = new Res(fs.readFileSync(path.join(from, 'bitmaps.res')), fs.readFileSync(path.join(dir, 'bitmaps.res.ids'), 'utf8'));
             if (!CAR3D.check(eff, bmp)) { log('3D car ' + model + ' left alone: not the body effect and texture known'); return kept(); }
             if (!carMarks(m)) { log('3D car ' + model + ' left alone: no body mesh to carry the picture'); return kept(); }
@@ -516,9 +587,10 @@ async function setCar(slot, rgba, where) {
     const targetModels = activeModels.length ? activeModels : slot.models;
     targetModels.forEach((m) => CAR_FILES.forEach((f) => {            // the originals first, each copied once
         const bk = carBackup(m, f);
-        if (fs.existsSync(bk)) return;                                // (a model without a copy was never changed: its files are the originals)
+        if (fs.existsSync(bk) || S.carUnbacked) return;               // (a model without a copy was never changed: its files are the originals)
         mkdirp(path.dirname(bk));
         fs.writeFileSync(bk + '.tmp', fs.readFileSync(path.join(m.dir, f))); fs.renameSync(bk + '.tmp', bk);
+        syncToVault(bk, carBackupRel(m, f));
     }));
     const jobs = [], photo = W.fit(rgba, slot.w, slot.h, CAR3D.PW, CAR3D.PH);
     let drop = [];
@@ -534,7 +606,10 @@ async function setCar(slot, rgba, where) {
         slot.models.filter((m) => targetModels.indexOf(m) < 0).forEach(back);    // restore unused models changed by an earlier version
         targetModels.forEach((m) => {
             const ids = (f) => fs.readFileSync(path.join(m.dir, f + '.ids'), 'utf8');
-            const eff = new Res(fs.readFileSync(carBackup(m, 'effects.res')), ids('effects.res')), bmp = new Res(fs.readFileSync(carBackup(m, 'bitmaps.res')), ids('bitmaps.res'));
+            const hasBk = CAR_FILES.every((f) => fs.existsSync(carBackup(m, f)));
+            const rawEff = new Res(fs.readFileSync(hasBk ? carBackup(m, 'effects.res') : path.join(m.dir, 'effects.res')), ids('effects.res'));
+            const eff = CAR3D.isPatched(rawEff) ? CAR3D.unpatchEffects(rawEff) : rawEff;
+            const bmp = new Res(fs.readFileSync(hasBk ? carBackup(m, 'bitmaps.res') : path.join(m.dir, 'bitmaps.res')), ids('bitmaps.res'));
             const mk = carMarks(m);
             if (!CAR3D.check(eff, bmp) || !mk) throw new Error('bản gốc của mô hình xe ' + m.model + ' không đúng');
             const effects = CAR3D.patchEffects(eff, mk.box, mk.at);          // the picture stands where the car does, as long as its body
@@ -615,7 +690,8 @@ async function restoreCar() {
 const startMark = () => path.join(CFG.state, 'start-changed'), startPhoto = () => path.join(CFG.state, 'start-photo.rgba');
 const shineFile = () => path.join(CFG.state, 'start-shine.json'), draftPic = () => path.join(CFG.state, 'start-draft.rgba'), draftInfo = () => path.join(CFG.state, 'start-draft.json');
 const PREVIEW_W = 480, PREVIEW_H = 180;             // 4 x 4 samples per macroblock of a 1920 x 720 picture: crisp preview on the car
-const startBackup = (f) => path.join(CFG.state, 'backup', 'start', f.sub, f.name);
+const startBackupRel = (f) => path.join('start', f.sub, f.name);
+const startBackup = (f) => path.join(CFG.state, 'backup', startBackupRel(f));
 
 let bootPlayedCache = null;
 /** The eva_* variant prefix animationplayer logged on this boot (e.g. '0x01_0x0'), or ''. */
@@ -644,22 +720,34 @@ function loadStart() {
     try { const m = /^HWGEN=(\d+)/m.exec(fs.readFileSync(CFG.variant, 'utf8')); gen = m ? 'mgu' + m[1] : ''; } catch (e) { gen = ''; }
     if (gen && subs.indexOf(gen) >= 0) subs = [gen];
     S.startChanged = fs.existsSync(startMark());
+    S.startUnbacked = false;
+    let sawOurBoot = false;
     const files = [];
     subs.forEach((sub) => fs.readdirSync(path.join(CFG.boot, sub)).sort().forEach((name) => {
         const m = /^eva_(splash|hi|bye)_.*\.(png|h264)$/.exec(name);
         if (!m || (m[1] === 'splash') !== (m[2] === 'png')) return;
-        const file = path.join(CFG.boot, sub, name), bk = startBackup({ sub, name });
+        const file = path.join(CFG.boot, sub, name), bk = startBackup({ sub, name }), vf = vaultFile(startBackupRel({ sub, name }));
+        if (!fs.existsSync(bk) && vf && fs.existsSync(vf)) {
+            try { mkdirp(path.dirname(bk)); fs.writeFileSync(bk + '.tmp', fs.readFileSync(vf)); fs.renameSync(bk + '.tmp', bk); } catch (e) {}
+        }
         try {
             const head = fs.readFileSync(file);
             if (m[2] === 'png') { const i = BOOT.pngInfo(head); files.push({ sub, name, file, kind: 'png', w: i.w, h: i.h }); }
             else {
                 const i = BOOT.h264Info(head); if (i.frames < 1) return;
-                const origBuf = S.startChanged && fs.existsSync(bk) ? fs.readFileSync(bk) : head;
+                if (shouldDetectOrphans() && !sawOurBoot && BOOT.isOurVideo(head)) sawOurBoot = true;
+                const origBuf = (S.startChanged || sawOurBoot) && fs.existsSync(bk) ? fs.readFileSync(bk) : head;
                 files.push({ sub, name, file, kind: 'h264', w: i.w, h: i.h, level: i.level, frames: i.frames, timing: BOOT.h264Timing(origBuf) });
             }
         } catch (e) { log('start-up file ' + name + ' left alone: ' + e.message); }
     }));
     if (!files.some((f) => f.kind === 'png')) return;
+    if (sawOurBoot && !S.startChanged) S.startChanged = true;
+    if (S.startChanged) {
+        const cleanBk = files.every((f) => fs.existsSync(startBackup(f))) &&
+            (!shouldDetectOrphans() || !files.some((f) => f.kind === 'h264' && BOOT.isOurVideo(fs.readFileSync(startBackup(f)))));
+        if (!cleanBk) S.startUnbacked = true;
+    }
     try { const d = JSON.parse(fs.readFileSync(draftInfo(), 'utf8')); S.draft = fs.existsSync(draftPic()) ? { shine: d.shine || null, brief: !!d.brief } : null; } catch (e) { S.draft = null; }
     S.slots[START] = { n: START, label: 'Màn hình khởi động', where: 'lúc màn hình khởi động, lúc chào khi lên xe và lúc tạm biệt', w: START_W, h: START_H, files, targets: [] };
     startThumb();
@@ -711,14 +799,17 @@ function parseShine(s) {
 }
 async function setStart(slot, rgba, shine, brief) {
     brief = !!brief;
-    // the originals first, each copied once
+    // the originals first, each copied once (when genuine factory files are still present)
     slot.files.forEach((f) => {
         const bk = startBackup(f);
-        if (fs.existsSync(bk) || S.startChanged) return;
+        if (fs.existsSync(bk) || S.startChanged || S.startUnbacked) return;
+        const cur = fs.readFileSync(f.file);
+        if (shouldDetectOrphans() && f.kind === 'h264' && BOOT.isOurVideo(cur)) { S.startUnbacked = true; return; }
         mkdirp(path.dirname(bk));
-        fs.writeFileSync(bk + '.tmp', fs.readFileSync(f.file)); fs.renameSync(bk + '.tmp', bk);
+        fs.writeFileSync(bk + '.tmp', cur); fs.renameSync(bk + '.tmp', bk);
+        syncToVault(bk, startBackupRel(f));
     });
-    if (slot.files.some((f) => !fs.existsSync(startBackup(f)))) throw new Error('thiếu bản gốc của màn hình khởi động');
+    if (!S.startUnbacked && slot.files.some((f) => !fs.existsSync(startBackup(f)))) throw new Error('thiếu bản gốc của màn hình khởi động');
     const made = {};                                                // files of one kind and size are the same bytes: one file, the others links to it
     const jobs = slot.files.map((f) => {
         // the greeting (eva_hi_*_noloop) opens the picture out of black (and with brief closes back to black so cold boot
@@ -762,8 +853,9 @@ async function restoreStart() {
     const slot = S.slots[START];
     const hadDraft = !!S.draft;
     if (hadDraft) dropDraft();
-    if (!slot) return;
-    if (!S.startChanged) { if (hadDraft) startThumb(); return; }
+    if (!slot) return false;
+    if (!S.startChanged) { if (hadDraft) startThumb(); return false; }
+    if (S.startUnbacked || slot.files.some((f) => !fs.existsSync(startBackup(f)))) return true;
     const jobs = slot.files.map((f) => ({ f, buf: fs.readFileSync(startBackup(f)) }));
     await writable(async () => jobs.forEach((j) => putFile(j.f.file, j.buf)));
     try { fs.unlinkSync(startMark()); } catch (e) { /* gone */ }
@@ -771,6 +863,7 @@ async function restoreStart() {
     try { fs.unlinkSync(shineFile()); } catch (e) { /* gone */ }
     S.startChanged = false; S.needsRestart = true;
     startThumb();
+    return false;
 }
 
 /** A start-up picture kept as a draft: nothing on the car changes, the app plays it as a preview until it is applied or dropped. */
@@ -871,15 +964,41 @@ async function restore(which) {          // a slot's number, or 'all'
         if (!S.compatible) throw bad('chưa có bản gốc để khôi phục');
         const slot = which === 'all' ? null : S.slots[which];
         if (which !== 'all' && !slot) throw bad('số hình không đúng');
+        if (slot) {
+            const lost = (slot.files && S.startUnbacked) || (slot.models && S.carUnbacked) ||
+                (!slot.files && !slot.models && slot.targets.some((t) => t.b.unbacked && t.b.unbacked[t.key]));
+            if (lost) throw bad('Hình này đã đổi từ trước khi gỡ bản cũ nên không còn file gốc BMW; hãy gửi ảnh mới đè lên nếu muốn đổi.');
+        }
         S.busy = true; writeStatus();
         try {
+            let keptUnbacked = false;
             if (!slot) {
                 const todo = Object.keys(S.bundles).map((id) => S.bundles[id]).filter((b) => b.usable && Object.keys(b.changed).length && !(S.slots[CAR] && /^car-/.test(b.id)));
-                const files = todo.map((b) => ({ b, buf: fs.readFileSync(b.bk) }));
-                if (files.length) await writable(async () => files.forEach((f) => { commit(f.b, f.buf); f.b.changed = {}; }));
-                Object.keys(S.slots).forEach((k) => { const s = S.slots[k]; if (!s.files && !s.models && todo.indexOf(s.targets[0].b) >= 0) thumbFrom(s, readOriginal(s.targets[0].b)); });
-                await restoreStart();
-                await restoreCar();
+                const files = [];
+                todo.forEach((b) => {
+                    const unb = Object.keys(b.unbacked || {});
+                    if (unb.length) keptUnbacked = true;
+                    const restorable = Object.keys(b.changed).filter((k) => !(b.unbacked && b.unbacked[k]));
+                    if (!restorable.length) return;
+                    if (!unb.length) {
+                        files.push({ b, buf: fs.readFileSync(b.bk), clearAll: true });
+                    } else {
+                        const orig = readOriginal(b), cur = readBundle(b), replace = {};
+                        restorable.forEach((k) => { if (orig.byKey[k]) replace[k] = { blob: orig.blob(k) }; });
+                        files.push({ b, buf: cur.build(replace), keys: restorable });
+                    }
+                });
+                if (files.length) await writable(async () => files.forEach((f) => {
+                    commit(f.b, f.buf);
+                    if (f.clearAll) f.b.changed = {};
+                    else f.keys.forEach((k) => { delete f.b.changed[k]; });
+                }));
+                Object.keys(S.slots).forEach((k) => {
+                    const s = S.slots[k];
+                    if (!s.files && !s.models && todo.indexOf(s.targets[0].b) >= 0) thumbFrom(s, readBundle(s.targets[0].b));
+                });
+                if (await restoreStart()) keptUnbacked = true;
+                if (S.carUnbacked) keptUnbacked = true; else await restoreCar();
             } else if (slot.models) {
                 await restoreCar();
             } else if (slot.files) {
@@ -894,8 +1013,12 @@ async function restore(which) {          // a slot's number, or 'all'
                 thumbFrom(slot, files[0].orig);
             }
             S.rev++;
-            log('restored ' + which);
-            say('go', (!slot ? 'Đã khôi phục tất cả hình gốc.' : slot.models ? 'Đã khôi phục chiếc xe gốc.' : slot.files ? 'Đã khôi phục màn hình khởi động gốc.' : which <= SLOTS ? 'Đã khôi phục hình số ' + which + '.' : 'Đã khôi phục hình "' + slot.label + '".') + ' Khởi động lại màn hình xe để thấy.');
+            log('restored ' + which + (keptUnbacked ? ' (some unbacked kept)' : ''));
+            if (!slot && keptUnbacked) {
+                say('warn', 'Đã khôi phục các mục còn bản gốc (ảnh đổi từ trước khi gỡ bản cũ không còn file gốc BMW, có thể gửi ảnh mới đè lên).');
+            } else {
+                say('go', (!slot ? 'Đã khôi phục tất cả hình gốc.' : slot.models ? 'Đã khôi phục chiếc xe gốc.' : slot.files ? 'Đã khôi phục màn hình khởi động gốc.' : which <= SLOTS ? 'Đã khôi phục hình số ' + which + '.' : 'Đã khôi phục hình "' + slot.label + '".') + ' Khởi động lại màn hình xe để thấy.');
+            }
         } finally { S.busy = false; writeStatus(); }
     });
 }
@@ -983,7 +1106,7 @@ function writeStatus() {
     const ips = addresses();
     const st = {
         at: Date.now(), version: VERSION, rev: S.rev, up: Math.round((Date.now() - S.startedAt) / 1000),
-        compatible: S.compatible, error: S.error, busy: S.busy,
+        starting: !!S.starting, compatible: S.compatible, error: S.error, busy: S.busy,
         port: S.port, pin: S.pin, ips, ipIndex: ips.length ? S.ipIndex % ips.length : 0,
         url: ips.length && S.port ? 'http://' + ips[S.ipIndex % ips.length] + ':' + S.port + '/?pin=' + S.pin : '',
         message: S.message, messageKind: S.messageKind, needsRestart: S.needsRestart, carWhere: carWhere(), preview: S.preview || null,
@@ -1358,9 +1481,14 @@ function start(opts) {
     let lastActiveAt = Date.now(), everOpened = false, sleeping = false;
     S.pin = newPin();
     try { mkdirp(CFG.state); } catch (e) { /* tests */ }
+    try { mkdirp(CFG.run); } catch (e) { /* tests */ }
+    S.starting = true; S.compatible = true; S.error = '';
+    writeStatus();
     try { load(); } catch (e) { S.compatible = false; S.error = 'lỗi khi đọc gói ảnh: ' + e.message; }
+    S.starting = false;
     if (!S.compatible) log('not usable: ' + S.error);
     else { log('pictures: ' + Object.keys(S.slots).length + ', small icons ' + (S.smallIcons ? 'yes' : 'no')); say('dim', 'Sẵn sàng.'); }
+    writeStatus();
     const server = http.createServer((req, res) => {
         lastActiveAt = Date.now();
         everOpened = true;

@@ -11,7 +11,7 @@
         "ID7"
       ],
       "requires": {
-        "bimmer-drive": "1.0.2",
+        "bimmer-drive": "1.0.3",
         "idrive7-renderd": "2.1.7",
         "mgu-inputgate": "1.0.0"
       },
@@ -48,7 +48,8 @@
         "ID7"
       ],
       "requires": {
-        "anh-dai-dien": "1.0.2",
+        "anh-dai-dien": "1.0.3",
+        "bimmer-drive": "1.0.3",
         "idrive7-renderd": "2.1.7",
         "mgu-inputgate": "1.0.0"
       },

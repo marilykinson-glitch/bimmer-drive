@@ -435,4 +435,29 @@ function pngDecode(buf) {
     return { w, h, rgba: out };
 }
 
-module.exports = { h264Info, h264Timing, blackVideo, stillVideo, openingVideo, pngInfo, pngDecode, nals };
+const OUR_PPS = (() => {
+    const pps = new BitWriter(16);
+    pps.ue(0); pps.ue(0); pps.u(1, 0); pps.u(1, 0); pps.ue(0);
+    pps.ue(0); pps.ue(0); pps.u(1, 0); pps.u(2, 0);
+    pps.se(0); pps.se(0); pps.se(0);
+    pps.u(1, 1); pps.u(1, 0); pps.u(1, 0);
+    pps.trailing();
+    return pps.done();
+})();
+
+/** Whether an H.264 elementary stream carries our exact Constrained Baseline + CAVLC + uncompressed I_PCM signature. */
+function isOurVideo(buf) {
+    try {
+        if (!buf || buf.length < 512) return false;
+        const list = nals(buf);
+        if (list.length < 3 || list[0].type !== 7 || list[1].type !== 8 || list[2].type !== 5) return false;
+        if (buf[list[0].start] !== 66 || buf[list[0].start + 1] !== 0xc0) return false;
+        const pps = unescape(buf.slice(list[1].start, list[1].end));
+        if (Buffer.compare(pps, OUR_PPS) !== 0) return false;
+        const info = h264Info(buf);
+        const mbs = Math.ceil(info.w / 16) * Math.ceil(info.h / 16);
+        return (list[2].end - list[2].start) >= mbs * 384;
+    } catch (e) { return false; }
+}
+
+module.exports = { h264Info, h264Timing, blackVideo, stillVideo, openingVideo, isOurVideo, pngInfo, pngDecode, nals };

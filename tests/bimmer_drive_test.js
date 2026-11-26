@@ -229,13 +229,27 @@ function ok(cond, msg) {
         ok(cv.w === UI.W && cv.h === UI.H, 'UI tab ' + page + ' renders cleanly');
     }
 
-    // MGU Studio smooth on-demand waking state
+    // MGU Studio smooth on-demand waking & starting states + Orphan/Vault recovery tests
     const cvAnh = new Recorder(AnhUI.W, AnhUI.H);
     const seenTexts = [];
     const origText = cvAnh.text.bind(cvAnh);
     cvAnh.text = function (s) { seenTexts.push(String(s)); return origText.apply(cvAnh, arguments); };
-    AnhUI.draw(cvAnh, G, theme, { state: 'down', waking: true, version: 'Bản 1.0.1' }, {});
-    ok(seenTexts.some((s) => s.indexOf('Đang đánh thức trợ thủ') >= 0) && seenTexts.some((s) => s.indexOf('ĐANG BẬT TRỢ THỦ') >= 0), 'MGU Studio shows friendly waking message instead of error during on-demand startup');
+    AnhUI.draw(cvAnh, G, theme, { state: 'down', waking: true, version: 'Bản 1.0.3' }, {});
+    AnhUI.draw(cvAnh, G, theme, { state: 'starting', waking: true, version: 'Bản 1.0.3' }, {});
+    ok(seenTexts.some((s) => s.indexOf('Đang đánh thức trợ thủ') >= 0) && seenTexts.some((s) => s.indexOf('ĐANG ĐỌC GÓI ẢNH') >= 0),
+        'MGU Studio renders both waking and starting states cleanly without false error');
+
+    const W = require('../tools/anh-dai-dien/wbm');
+    const BOOT = require('../tools/anh-dai-dien/boot');
+    const CAR3D = require('../tools/anh-dai-dien/car3d');
+    const bootVid = BOOT.openingVideo(Buffer.alloc(320 * 160 * 4, 180), 320, 160, { frames: 20 });
+    ok(BOOT.isOurVideo(bootVid) === true && BOOT.isOurVideo(Buffer.from([0, 0, 0, 1, 0x67, 100, 0, 31])) === false,
+        'BOOT.isOurVideo accurately distinguishes MGU Studio startup videos from compressed H.264');
+    const vOrig = '#version 300 es\nin vec3 a_Position;\nuniform mat4 u_MVPMatrix;\nvoid main() {\n\tgl_Position = u_MVPMatrix * vec4(a_Position, 1.);\n}';
+    const vPatched = CAR3D.billboard(vOrig, { x: 0, y: 0, z: 0, w: 100, h: 40 }, [[0, 0, 0], [1, 0, 0], [0, 1, 0], [2, 0, 0], [0, 2, 0], [2, 2, 0]]);
+    ok(CAR3D.unpatchShader(vPatched) === vOrig && CAR3D.unpatchShader(CAR3D.hide(vOrig)) === vOrig,
+        'CAR3D.unpatchShader reverses billboard and hide shaders back to exact original GLSL');
+    ok(typeof W.isOurEncoded === 'function', 'W.isOurEncoded exported for orphan avatar detection');
 
     ok(WOC.envLine('zoom1').indexOf('1600x600:308,60,1088,480') >= 0, 'WOC mirror crop line matches zoom1');
 }
@@ -261,8 +275,8 @@ async function runIntegration() {
     // Pre-populate leftover stale file in compatDir to verify ensureCompatSymlink replaces leftover directory cleanly
     fs.writeFileSync(path.join(compatDir, 'status.json'), '{}');
 
-    fs.writeFileSync(path.join(appRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'bimmer_drive', version: '1.0.2' }));
-    fs.writeFileSync(path.join(anhRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'anh_dai_dien', version: '1.0.2' }));
+    fs.writeFileSync(path.join(appRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'bimmer_drive', version: '1.0.3' }));
+    fs.writeFileSync(path.join(anhRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'anh_dai_dien', version: '1.0.3' }));
     fs.writeFileSync(path.join(wocRun, 'status.json'), JSON.stringify({ state: 'starting', reason: 'under an alert on the cluster', target: 'map', cluster: 1, hud: 1, hud_state: 'showing', hide_bmw_guidance: 1 }));
 
     const fakeCrPath = path.join(tmp, 'fake_cr_client.js');
@@ -328,8 +342,8 @@ setInterval(() => {
     await sleep(300);
 
     const st0 = JSON.parse(fs.readFileSync(path.join(runDir, 'status.json'), 'utf8'));
-    ok(st0.version === '1.0.2' && st0.symbol === '---' && st0.shown.indexOf('map') >= 0, 'OEM --- sign shown while waze-on-cluster is suspended under alert');
-    ok(fs.lstatSync(compatDir).isSymbolicLink() && JSON.parse(fs.readFileSync(path.join(compatDir, 'status.json'), 'utf8')).version === '1.0.2', 'leftover /run/vietmap-signs directory replaced cleanly with symlink');
+    ok(st0.version === '1.0.3' && st0.symbol === '---' && st0.shown.indexOf('map') >= 0, 'OEM --- sign shown while waze-on-cluster is suspended under alert');
+    ok(fs.lstatSync(compatDir).isSymbolicLink() && JSON.parse(fs.readFileSync(path.join(compatDir, 'status.json'), 'utf8')).version === '1.0.3', 'leftover /run/vietmap-signs directory replaced cleanly with symlink');
 
     const code = st0.pairing.code;
     ok(/^\d{6}$/.test(code), '6-digit pairing code generated');
