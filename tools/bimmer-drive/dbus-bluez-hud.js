@@ -12,7 +12,9 @@
  *
  * Node 8.16 (ES2017) compatible, zero external dependencies.
  */
+const fs = require('fs');
 const net = require('net');
+const path = require('path');
 const vmHud = require('./vm-hud');
 
 const APP_PATH = '/dev/mgu/vmhud';
@@ -413,6 +415,46 @@ function advProps(localName) {
     };
 }
 
+function probeHciList(sysBtDir) {
+    const dir = sysBtDir || '/sys/class/bluetooth';
+    try {
+        return fs.readdirSync(dir).filter((n) => /^hci\d+$/.test(n)).sort();
+    } catch (e) {
+        return [];
+    }
+}
+
+function resolveDbusSocket(requestedPath) {
+    if (requestedPath && requestedPath !== '/var/run/dbus/system_bus_socket') {
+        return requestedPath;
+    }
+    const candidates = ['/var/run/dbus/system_bus_socket', '/run/dbus/system_bus_socket'];
+    for (let i = 0; i < candidates.length; i++) {
+        try {
+            if (fs.existsSync(candidates[i])) return candidates[i];
+        } catch (e) {}
+    }
+    return '/var/run/dbus/system_bus_socket';
+}
+
+function shortDbusErr(msg) {
+    const s = String(msg || 'err');
+    const m = /(?:^|\.)([A-Za-z0-9_]+):/.exec(s);
+    return m ? m[1] : s.slice(0, 32);
+}
+
+function describeMissingAdapter(managed) {
+    if (!managed || typeof managed !== 'object') return 'bluez 0 adapter';
+    const adapters = Object.keys(managed).filter((p) => /^\/org\/bluez\/hci\d+$/.test(p)).sort();
+    if (!adapters.length) return 'bluez 0 adapter';
+    const first = adapters[0];
+    const ifaces = managed[first] || {};
+    const missing = [];
+    if (!Object.prototype.hasOwnProperty.call(ifaces, 'org.bluez.GattManager1')) missing.push('GattMgr');
+    if (!Object.prototype.hasOwnProperty.call(ifaces, 'org.bluez.LEAdvertisingManager1')) missing.push('AdvMgr');
+    return first.split('/').pop() + ' thiếu ' + (missing.length ? missing.join(',') : 'iface');
+}
+
 function pickAdapter(managed) {
     if (!managed || typeof managed !== 'object') return null;
     const paths = Object.keys(managed).filter((p) => {
@@ -435,11 +477,17 @@ function pickAdapter(managed) {
 
 function createBluezHud(opts) {
     const o = opts || {};
-    const socketPath = o.socketPath || '/var/run/dbus/system_bus_socket';
+    const socketPath = resolveDbusSocket(o.socketPath);
+    const sysBtDir = o.sysBtDir || '/sys/class/bluetooth';
     const localName = o.localName || vmHud.ADV_NAME;
     const log = typeof o.log === 'function' ? o.log : () => {};
     const onState = typeof o.onState === 'function' ? o.onState : () => {};
     const onUpdate = typeof o.onUpdate === 'function' ? o.onUpdate : () => {};
+
+    function hciTag() {
+        const list = probeHciList(sysBtDir);
+        return list.length ? ('hci:' + list.join(',')) : 'no-hci';
+    }
 
     let sock = null;
     let closed = false;
@@ -632,7 +680,7 @@ function createBluezHud(opts) {
                 authStage = 1;
                 sendRaw(Buffer.from('AUTH ANONYMOUS\r\n', 'ascii'));
             } else {
-                setState({ bleState: 'no_bluez', bleError: 'dbus auth rejected: ' + line });
+                setState({ bleState: 'no_bluez', bleError: 'dbus auth rejected: ' + line, bleDetail: ('dbus auth · ' + hciTag()).slice(0, 56) });
                 cleanupSocket();
                 return;
             }
@@ -652,8 +700,9 @@ function createBluezHud(opts) {
                 const managed = reply.args && reply.args[0] ? reply.args[0] : {};
                 adapterPath = pickAdapter(managed);
                 if (!adapterPath) {
-                    setState({ bleState: 'no_adapter', bleAdapter: null, bleError: null });
-                    log('vm-hud ble: no BlueZ GattManager1+LEAdvertisingManager1 adapter');
+                    const detail = (describeMissingAdapter(managed) + ' · ' + hciTag()).slice(0, 56);
+                    setState({ bleState: 'no_adapter', bleAdapter: null, bleError: null, bleDetail: detail });
+                    log('vm-hud ble: ' + detail);
                     return null;
                 }
                 const shortName = adapterPath.split('/').pop();
@@ -664,7 +713,7 @@ function createBluezHud(opts) {
                     })
                     .then(() => {
                         advRegistered = true;
-                        setState({ bleState: 'advertising', bleAdapter: shortName, bleError: null });
+                        setState({ bleState: 'advertising', bleAdapter: shortName, bleError: null, bleDetail: shortName + ' ok' });
                         log('vm-hud ble: advertising "' + localName + '" via BlueZ on ' + shortName);
                     });
             })
@@ -672,12 +721,14 @@ function createBluezHud(opts) {
                 if (closed) return;
                 const msg = String((err && err.message) || err);
                 const noService = msg.indexOf('ServiceUnknown') >= 0 || msg.indexOf('NameHasNoOwner') >= 0 || msg.indexOf('AccessDenied') >= 0;
+                const detail = (shortDbusErr(msg) + ' · ' + hciTag()).slice(0, 56);
                 setState({
                     bleState: noService ? 'no_bluez' : 'error',
                     bleAdapter: adapterPath ? adapterPath.split('/').pop() : null,
                     bleError: noService ? null : msg.slice(0, 140),
+                    bleDetail: detail,
                 });
-                log('vm-hud ble: ' + (noService ? 'BlueZ unavailable (' + msg + ')' : msg));
+                log('vm-hud ble: ' + (noService ? 'BlueZ unavailable (' + detail + ')' : msg));
             });
     }
 
@@ -693,7 +744,7 @@ function createBluezHud(opts) {
         try {
             sock = net.createConnection(socketPath);
         } catch (e) {
-            setState({ bleState: 'no_bluez', bleError: null });
+            setState({ bleState: 'no_bluez', bleError: null, bleDetail: ('dbus ' + ((e && e.code) || 'err') + ' · ' + hciTag()).slice(0, 56) });
             return;
         }
         sock.on('connect', () => {
@@ -704,7 +755,8 @@ function createBluezHud(opts) {
         sock.on('data', onSocketData);
         sock.on('error', (e) => {
             if (!authed && !closed) {
-                setState({ bleState: 'no_bluez', bleError: null });
+                const detail = ('dbus ' + ((e && e.code) || 'err') + ' · ' + hciTag()).slice(0, 56);
+                setState({ bleState: 'no_bluez', bleError: null, bleDetail: detail });
                 log('vm-hud ble: dbus socket unavailable (' + e.message + ')');
             }
             cleanupSocket();
@@ -748,6 +800,8 @@ module.exports = {
     encodeMessage,
     tryDecodeMessage,
     pickAdapter,
+    probeHciList,
+    describeMissingAdapter,
     gattManagedObjects,
     createBluezHud,
 };

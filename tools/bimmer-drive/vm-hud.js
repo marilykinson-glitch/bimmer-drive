@@ -23,6 +23,43 @@ const WRITE_UUID = '0000fff2-0000-1000-8000-00805f9b34fb';
 const ADV_NAME = 'HUD(BLE)';
 const HUD_INFO_STR = 'MODEL:H1N,HW:1.0,FW:1.0,PROTOCOL:2.2.2,OBDV:1_1,SID:0';
 
+const USB_BRIDGE_VIDS = {
+    '303a': 'ESP32',
+    '10c4': 'CP210x',
+    '1a86': 'CH34x',
+    '0403': 'FTDI',
+    '2341': 'Arduino',
+};
+
+function readUsbVendor(devName, sysTtyDir) {
+    const base = sysTtyDir || '/sys/class/tty';
+    const devPath = path.join(base, devName, 'device');
+    try {
+        let cur = fs.realpathSync(devPath);
+        for (let i = 0; i < 4; i++) {
+            cur = path.dirname(cur);
+            const vPath = path.join(cur, 'idVendor');
+            if (fs.existsSync(vPath)) {
+                const raw = fs.readFileSync(vPath, 'utf8').trim().toLowerCase();
+                if (raw) return raw;
+            }
+        }
+    } catch (e) {}
+    const fallbacks = [
+        path.join(devPath, '..', 'idVendor'),
+        path.join(devPath, '..', '..', 'idVendor'),
+    ];
+    for (let i = 0; i < fallbacks.length; i++) {
+        try {
+            if (fs.existsSync(fallbacks[i])) {
+                const raw = fs.readFileSync(fallbacks[i], 'utf8').trim().toLowerCase();
+                if (raw) return raw;
+            }
+        } catch (e) {}
+    }
+    return null;
+}
+
 const CAM_TYPE_HINTS = {
     1: 'Camera tốc độ',
     2: 'Camera đèn đỏ',
@@ -273,6 +310,7 @@ function createProtocol(opts) {
 function createSerialBridge(opts) {
     const o = opts || {};
     const devDir = o.devDir || '/dev';
+    const sysTtyDir = o.sysTtyDir || '/sys/class/tty';
     const overrideDev = o.device || '';
     const scanMs = Number(o.scanMs) || 5000;
     const log = typeof o.log === 'function' ? o.log : () => {};
@@ -292,7 +330,11 @@ function createSerialBridge(opts) {
         let names = [];
         try { names = fs.readdirSync(devDir); } catch (e) { return []; }
         return names
-            .filter((n) => /^tty(ACM|USB)\d+$/.test(n))
+            .filter((n) => {
+                if (!/^tty(ACM|USB)\d+$/.test(n)) return false;
+                const vid = readUsbVendor(n, sysTtyDir);
+                return !!(vid && Object.prototype.hasOwnProperty.call(USB_BRIDGE_VIDS, vid));
+            })
             .sort()
             .map((n) => path.join(devDir, n));
     }
@@ -379,7 +421,9 @@ module.exports = {
     WRITE_UUID,
     ADV_NAME,
     HUD_INFO_STR,
+    USB_BRIDGE_VIDS,
     camTypeHint,
+    readUsbVendor,
     crc16Modbus,
     buildC3Frame,
     buildC5Frame,

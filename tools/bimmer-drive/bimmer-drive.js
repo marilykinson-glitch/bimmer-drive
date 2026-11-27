@@ -32,7 +32,7 @@ const wocMirror = require('./woc-mirror');
 const vmHud = require('./vm-hud');
 const dbusBluezHud = require('./dbus-bluez-hud');
 
-const VERSION = '1.1.0';
+const VERSION = '1.1.1';
 const env = (k, d) => (process.env[k] !== undefined && process.env[k] !== '' ? process.env[k] : d);
 
 const CFG = {
@@ -62,6 +62,8 @@ const CFG = {
     vmhudStaleMs: Number(env('BD_VMHUD_STALE_MS', 15000)),
     vmhudSerial: env('BD_VMHUD_SERIAL', ''),
     vmhudDevDir: env('BD_VMHUD_DEV_DIR', '/dev'),
+    vmhudSysTty: env('BD_VMHUD_SYS_TTY', '/sys/class/tty'),
+    vmhudSysBt: env('BD_VMHUD_SYS_BT', '/sys/class/bluetooth'),
     wocStaleMs: Number(env('BD_WOC_STALE_MS', 30000)),
     ruleMs: Number(env('BD_RULE_MS', 30000)),
     loopback: env('BD_LOOPBACK', '') === '1',
@@ -517,7 +519,7 @@ const phone = { from: null, at: 0, seq: null, limit: null, next: null, hint: nul
 const vmhud = {
     transport: null, connected: false, model: null, at: 0,
     limit: null, next: null, nextDist: null, camType: null, camDist: null, hint: null,
-    packets: 0, bleState: 'off', bleAdapter: null, bleError: null, usbDev: null,
+    packets: 0, bleState: 'off', bleAdapter: null, bleError: null, bleDetail: null, usbDev: null,
 };
 
 function ipv4ToInt(a) { return a.split('.').reduce((n, x) => ((n << 8) >>> 0) + (Number(x) & 255), 0) >>> 0; }
@@ -1229,7 +1231,7 @@ function run() {
 
         const statusKey = JSON.stringify([
             sentView, fps, nativeFresh ? native.shown : 0, nativeFresh ? native.layer : '', nativeFresh ? native.aux_shown : 0,
-            lastSignSummary, s.over, s.source, phone.from, phone.packets, vmhud.connected, vmhud.limit, vmhud.bleState, vmhud.usbDev,
+            lastSignSummary, s.over, s.source, phone.from, phone.packets, vmhud.connected, vmhud.limit, vmhud.bleState, vmhud.bleDetail, vmhud.usbDev,
             vmc.on, vmc.running, vmc.error, navInfo.state, navInfo.last,
         ]);
         if (statusKey !== lastStatusKey || now - lastWriteAt >= 950) {
@@ -1277,6 +1279,7 @@ function run() {
                 bleState: vmhud.bleState,
                 bleAdapter: vmhud.bleAdapter,
                 bleError: vmhud.bleError,
+                bleDetail: vmhud.bleDetail,
                 usbDev: vmhud.usbDev,
             },
             limit: s.limit,
@@ -1349,11 +1352,13 @@ function run() {
     if (CFG.vmHud) {
         bluezHud = dbusBluezHud.createBluezHud({
             socketPath: CFG.dbusSock,
+            sysBtDir: CFG.vmhudSysBt,
             log,
             onState: (st) => {
                 if (st.bleState !== undefined) vmhud.bleState = st.bleState;
                 if (st.bleAdapter !== undefined) vmhud.bleAdapter = st.bleAdapter;
                 if (st.bleError !== undefined) vmhud.bleError = st.bleError;
+                if (st.bleDetail !== undefined) vmhud.bleDetail = st.bleDetail;
                 try { coordinate(Date.now()); } catch (e) {}
             },
             onUpdate: (ev) => onVmHudEvent('ble', ev),
@@ -1361,6 +1366,7 @@ function run() {
         serialBridge = vmHud.createSerialBridge({
             device: CFG.vmhudSerial,
             devDir: CFG.vmhudDevDir,
+            sysTtyDir: CFG.vmhudSysTty,
             log,
             onState: (st) => {
                 if (st.usbDev !== undefined) vmhud.usbDev = st.usbDev;
@@ -1454,7 +1460,7 @@ module.exports = {
         Object.assign(vmhud, {
             transport: null, connected: false, model: null, at: 0,
             limit: null, next: null, nextDist: null, camType: null, camDist: null, hint: null,
-            packets: 0, bleState: 'off', bleAdapter: null, bleError: null, usbDev: null,
+            packets: 0, bleState: 'off', bleAdapter: null, bleError: null, bleDetail: null, usbDev: null,
         });
     },
 };

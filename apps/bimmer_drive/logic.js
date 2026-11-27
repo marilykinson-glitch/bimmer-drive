@@ -456,17 +456,19 @@ function signReport(st, s) {
     const unpaired = !!(pr.on && pr.refused && pr.ago_ms !== null && pr.ago_ms < 10000 && !(p.at && p.ago_ms < pr.ago_ms));
     const ago = (ms) => (ms === null || ms === undefined ? '' : ms < 2000 ? 'vừa xong' : Math.round(ms / 1000) + ' giây trước');
 
+    const usbTag = (!vh.connected && vh.usbDev) ? (' · USB ' + String(vh.usbDev).split('/').pop()) : '';
     if (vh.connected) {
         const via = vh.transport === 'usb' ? 'USB' : 'BLE';
         lines.push({ text: 'VietMap HUD (' + via + '): đã nối ' + (vh.model || 'H1N') + (vh.limit ? ' · biển ' + vh.limit : ''), kind: 'go' });
     } else if (vh.bleState === 'advertising') {
-        lines.push({ text: 'VietMap HUD (BLE): đang phát HUD(BLE) trên ' + (vh.bleAdapter || 'hci0'), kind: 'go' });
-    } else if (vh.usbDev) {
-        lines.push({ text: 'VietMap HUD (USB): đã gắn ' + vh.usbDev + ' · chờ VietMap Live', kind: 'dim' });
+        lines.push({ text: 'VietMap HUD (BLE): đang phát HUD(BLE) trên ' + (vh.bleAdapter || 'hci0') + usbTag, kind: 'go' });
     } else if (vh.bleState === 'no_bluez' || vh.bleState === 'no_adapter') {
-        lines.push({ text: 'VietMap HUD (BLE): xe không mở BlueZ · cắm ESP32 USB hoặc dùng ĐT', kind: 'dim' });
-    } else if (vh.bleError) {
-        lines.push({ text: 'VietMap HUD (BLE): ' + vh.bleError, kind: 'warn' });
+        const det = vh.bleDetail ? ' (' + vh.bleDetail + ')' : '';
+        lines.push({ text: 'VietMap HUD (BLE): xe không mở BlueZ' + det + usbTag, kind: 'dim' });
+    } else if (vh.bleError || vh.bleDetail) {
+        lines.push({ text: 'VietMap HUD (BLE): ' + (vh.bleDetail || vh.bleError) + usbTag, kind: 'warn' });
+    } else {
+        lines.push({ text: 'VietMap HUD (BLE): đang khởi tạo…' + usbTag, kind: 'dim' });
     }
 
     const srcMode = (s && s.signSource) || (st.settings && st.settings.source) || 'auto';

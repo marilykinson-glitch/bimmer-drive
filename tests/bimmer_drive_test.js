@@ -336,7 +336,7 @@ async function runIntegration() {
     // Pre-populate leftover stale file in compatDir to verify ensureCompatSymlink replaces leftover directory cleanly
     fs.writeFileSync(path.join(compatDir, 'status.json'), '{}');
 
-    fs.writeFileSync(path.join(appRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'bimmer_drive', version: '1.1.0' }));
+    fs.writeFileSync(path.join(appRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'bimmer_drive', version: '1.1.1' }));
     fs.writeFileSync(path.join(anhRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'anh_dai_dien', version: '1.0.3' }));
     fs.writeFileSync(path.join(wocRun, 'status.json'), JSON.stringify({ state: 'starting', reason: 'under an alert on the cluster', target: 'map', cluster: 1, hud: 1, hud_state: 'showing', hide_bmw_guidance: 1 }));
 
@@ -457,12 +457,20 @@ setInterval(() => {
     });
     await new Promise((r) => dbusSrv.listen(mockDbusSock, r));
 
-    // Also test no_bluez graceful fallback when socket is absent
-    let noBluezState = null;
-    const probeNoBluez = DBH.createBluezHud({ socketPath: path.join(tmp, 'missing_dbus'), onState: (s) => { noBluezState = s.bleState; } });
+    // Also test no_bluez graceful fallback with sysBtDir bleDetail diagnostics
+    const mockSysBt = path.join(tmp, 'sys-bt');
+    mkp(path.join(mockSysBt, 'hci0'));
+    let noBluezEv = null;
+    const probeNoBluez = DBH.createBluezHud({
+        socketPath: path.join(tmp, 'missing_dbus'),
+        sysBtDir: mockSysBt,
+        onState: (s) => { noBluezEv = s; },
+    });
     await new Promise((r) => setTimeout(r, 80));
     probeNoBluez.stop();
-    ok(noBluezState === 'no_bluez', 'dbus-bluez-hud fails gracefully with bleState=no_bluez when system D-Bus is absent');
+    ok(noBluezEv && noBluezEv.bleState === 'no_bluez' && typeof noBluezEv.bleDetail === 'string' &&
+        noBluezEv.bleDetail.indexOf('ENOENT') >= 0 && noBluezEv.bleDetail.indexOf('hci:hci0') >= 0,
+        'dbus-bluez-hud fails gracefully with bleState=no_bluez and exposes bleDetail (ENOENT + hci0)');
 
     process.env.BD_OAP = oapDir;
     process.env.BD_RUN = runDir;
@@ -478,6 +486,8 @@ setInterval(() => {
     process.env.BD_PORT = String(port);
     process.env.BD_DBUS_SOCK = mockDbusSock;
     process.env.BD_VMHUD_DEV_DIR = mockDevDir;
+    process.env.BD_VMHUD_SYS_TTY = path.join(tmp, 'sys-tty');
+    process.env.BD_VMHUD_SYS_BT = mockSysBt;
     process.env.BD_NFT = '/nonexistent-nft';
     process.env.BD_POLL_MS = '120';
 
@@ -489,22 +499,45 @@ setInterval(() => {
     await sleep(400);
 
     const st0 = JSON.parse(fs.readFileSync(path.join(runDir, 'status.json'), 'utf8'));
-    ok(st0.version === '1.1.0' && st0.shown.indexOf('map') >= 0, 'v1.1.0 coordinator renders map layer while waze-on-cluster is suspended');
+    ok(st0.version === '1.1.1' && st0.shown.indexOf('map') >= 0, 'v1.1.1 coordinator renders map layer while waze-on-cluster is suspended');
     ok(selectedAdapter === '/org/bluez/hci1' && seenAliasWrites.length === 0, 'dbus-bluez-hud prefers secondary hci1 over hci0 and never renames Adapter1.Alias');
     const fullHudReply = Buffer.concat(seenNotifyChunks);
     ok(fullHudReply.toString('utf8').indexOf('MODEL:H1N,HW:1.0,FW:1.0,PROTOCOL:2.2.2') >= 0, 'dbus-bluez-hud emits chunked PropertiesChanged HUDInfo reply over D-Bus');
-    ok(st0.vmhud && st0.vmhud.connected === true && st0.vmhud.bleState === 'advertising' && st0.vmhud.limit === 80 && st0.limit === 80 && st0.source === 'vmhud',
+    ok(st0.vmhud && st0.vmhud.connected === true && st0.vmhud.bleState === 'advertising' && st0.vmhud.bleDetail === 'hci1 ok' && st0.vmhud.limit === 80 && st0.limit === 80 && st0.source === 'vmhud',
         'Live BlueZ GATT VietMap HUD connection updates cluster sign to 80 km/h with source=vmhud');
-    ok(fs.lstatSync(compatDir).isSymbolicLink() && JSON.parse(fs.readFileSync(path.join(compatDir, 'status.json'), 'utf8')).version === '1.1.0', 'leftover /run/vietmap-signs directory replaced cleanly with symlink');
+    ok(fs.lstatSync(compatDir).isSymbolicLink() && JSON.parse(fs.readFileSync(path.join(compatDir, 'status.json'), 'utf8')).version === '1.1.1', 'leftover /run/vietmap-signs directory replaced cleanly with symlink');
 
-    // Test ESP32 USB Serial Bridge JSON ingestion
-    const fakeSerialFile = path.join(mockDevDir, 'ttyACM0');
-    fs.writeFileSync(fakeSerialFile, '{"t":"vmhud","v":1,"limit":120,"next":100,"dist":250,"camType":1,"connected":true,"model":"H1N"}\n');
+    // Test ESP32 USB Serial Bridge: must IGNORE BMW internal ttyACM0 (no allowlisted idVendor) and ACCEPT ESP32 VID 303a
+    const mockSysTty = path.join(tmp, 'sys-tty');
+    const internalTty = path.join(mockDevDir, 'ttyACM0');
+    const espTty = path.join(mockDevDir, 'ttyACM1');
+    fs.writeFileSync(internalTty, '{"t":"vmhud","limit":99}\n');
+    fs.writeFileSync(espTty, '{"t":"vmhud","v":1,"limit":120,"next":100,"dist":250,"camType":1,"connected":true,"model":"H1N"}\n');
+    mkp(path.join(mockSysTty, 'ttyACM0', 'device'));
+    mkp(path.join(mockSysTty, 'ttyACM1', 'device'));
+    fs.writeFileSync(path.join(mockSysTty, 'ttyACM1', 'idVendor'), '303a\n');
+
     const serialEvs = [];
-    const sb = VH.createSerialBridge({ device: fakeSerialFile, scanMs: 500, onJson: (m) => serialEvs.push(m) });
+    const openedDevs = [];
+    const sb = VH.createSerialBridge({
+        devDir: mockDevDir,
+        sysTtyDir: mockSysTty,
+        scanMs: 500,
+        onState: (st) => { if (st.usbDev) openedDevs.push(st.usbDev); },
+        onJson: (m) => serialEvs.push(m),
+    });
     await sleep(120);
     sb.stop();
-    ok(serialEvs.length === 1 && serialEvs[0].limit === 120 && serialEvs[0].next === 100, 'USB serial bridge reads JSON speed-limit lines from ESP32 /dev/ttyACM0');
+    ok(openedDevs.indexOf(internalTty) < 0 && openedDevs.indexOf(espTty) >= 0 && serialEvs.length === 1 && serialEvs[0].limit === 120 && serialEvs[0].next === 100,
+        'USB serial bridge ignores internal ttyACM0 and opens ESP32 (VID 303a) ttyACM1');
+
+    // Verify logic.signReport always displays VietMap HUD (BLE) line with bleDetail even if usbDev is set
+    const rep = L.signReport({
+        vmhud: { connected: false, bleState: 'no_bluez', bleDetail: 'ServiceUnknown · hci:hci0', usbDev: '/dev/ttyACM9' },
+        phone: {}, pairing: {}, camera: {}, bmwmap: {}, shown: [], vmc: {},
+    }, { signMode: 'on', signEmpty: 'dashes' });
+    ok(rep.lines.some((l) => l.text.indexOf('VietMap HUD (BLE):') === 0 && l.text.indexOf('ServiceUnknown · hci:hci0') >= 0),
+        'signReport always shows VietMap HUD (BLE) diagnostics alongside usbDev');
 
     // Verify existing UDP 8471 compatibility remains intact alongside BLE HUD
     const code = st0.pairing.code;
