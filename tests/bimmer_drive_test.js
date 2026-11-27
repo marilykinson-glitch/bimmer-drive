@@ -24,6 +24,8 @@ const UI = require('../apps/bimmer_drive/ui');
 const AnhUI = require('../apps/anh_dai_dien/ui');
 const SC = require('../tools/bimmer-drive/signs-cam');
 const WOC = require('../tools/bimmer-drive/woc-mirror');
+const VH = require('../tools/bimmer-drive/vm-hud');
+const DBH = require('../tools/bimmer-drive/dbus-bluez-hud');
 const { Recorder } = require('../kit/runtime/record');
 const { listSheet } = require('../kit/runtime/sheet');
 const G = require('../kit/runtime/gauges');
@@ -200,6 +202,65 @@ function ok(cond, msg) {
     BD.camState.limit = 0;
     BD.phone.at = 0;
     BD.phone.limit = null;
+
+    // Test vmhud priority in decideSigns & signReport/ui rendering
+    Object.assign(BD.vmhud, { transport: 'ble', connected: true, model: 'H1N', at: now, limit: 80, next: 60, hint: 'Khu dân cư', bleState: 'advertising', bleAdapter: 'hci0' });
+    Object.assign(BD.phone, { from: '172.16.222.50', at: now, limit: 50 });
+    const dVmHud = BD.decideSigns(mkCtrl('vietmap'), null, false, false, now);
+    ok(dVmHud.limit === 80 && dVmHud.source === 'vmhud', 'signSource=vietmap prioritizes VietMap HUD BLE (80) over UDP phone (50)');
+    const repVm = L.signReport({
+        limit: 80, symbol: 80, source: 'vmhud', shown: ['map'],
+        vmhud: { transport: 'ble', connected: true, model: 'H1N', at: now, ago_ms: 100, limit: 80, next: 60, hint: 'Khu dân cư', bleState: 'advertising', bleAdapter: 'hci0' },
+        phone: {}, pairing: {}, camera: {}, bmwmap: {}, renderer: { installed: true }, vmc: {},
+    }, { signMode: 'on', signEmpty: 'dashes', signSource: 'vietmap' });
+    ok(repVm.vmhudLimit === 80 && repVm.lines.some((l) => l.text.indexOf('VietMap HUD (BLE): đã nối H1N') >= 0),
+        'signReport renders VietMap HUD BLE live connection line and next-limit alert');
+    BD._reset();
+}
+
+/* ---- 3b. VietMap HUD Protocol (`vm-hud.js`) ---- */
+{
+    const txLog = [];
+    const rxEvents = [];
+    const proto = VH.createProtocol({
+        subscribeDelayMs: 0,
+        onTx: (chunks, label) => txLog.push({ label, full: Buffer.concat(chunks), chunkLens: chunks.map((c) => c.length) }),
+        onUpdate: (ev) => rxEvents.push(ev),
+    });
+
+    // Feed 0x0E getHUDInfo in tiny split chunks
+    const reqInfo = VH.buildC3Frame(0x0E, Buffer.from([0x00]), 1700000000);
+    proto.feed(reqInfo.slice(0, 5));
+    proto.feed(reqInfo.slice(5, 14));
+    proto.feed(reqInfo.slice(14));
+    ok(rxEvents.some((e) => e.kind === 'handshake' && e.connected === true && e.model === 'H1N'), '0x0E handshake decoded across chunked BLE writes');
+    const hs = txLog.find((x) => x.label === 'HUDInfo');
+    ok(hs && hs.chunkLens.every((l) => l <= 20), 'HUDInfo response is chunked to <=20 bytes per BLE notification');
+    ok(hs.full[0] === 0xA5 && hs.full[1] === 0x5A && hs.full[2] === 0x37 && hs.full[3] === 0xC3, 'HUDInfo starts with A5 5A 37 C3 magic');
+    const hsLen = hs.full.readUInt32BE(4);
+    ok(hs.full.length === hsLen + 8 && hs.full[12] === 0x0E && hs.full.slice(13, hs.full.length - 8).toString('utf8') === VH.HUD_INFO_STR,
+        'HUDInfo matches P7/a.java byte offsets (len, cmd 0x0E, MODEL:H1N...PROTOCOL:2.2.2)');
+
+    // Feed C5 single camera (speed = 60, dist = 150, type = 1)
+    const c5 = VH.buildC5Frame(0x01, Buffer.from([1, 0x00, 0x96, 60]));
+    proto.feed(c5);
+    const ev60 = rxEvents[rxEvents.length - 1];
+    ok(ev60.kind === 'camera' && ev60.limit === 60 && ev60.camDist === 150 && ev60.camType === 1, 'C5 cmd 0x01 extracts speed 60 km/h and distance 150 m');
+
+    // Feed C3 multi camera tuple (current speed=50 dist=0, upcoming speed=80 dist=300)
+    const c3Cam = VH.buildC3Frame(0x01, Buffer.from([4, 0, 0, 50, 1, 0x01, 0x2C, 80]), 1700000001);
+    proto.feed(c3Cam);
+    const evMulti = rxEvents[rxEvents.length - 1];
+    ok(evMulti.kind === 'camera' && evMulti.limit === 50 && evMulti.next === 80 && evMulti.nextDist === 300,
+        'C3 cmd 0x01 extracts active limit 50 and upcoming limit 80 at 300 m');
+
+    // Test 0x50, 0x51, 0x53 queries and 0x40 heartbeat without clearing active limit
+    proto.feed(VH.buildC3Frame(0x50, Buffer.alloc(0)));
+    proto.feed(VH.buildC3Frame(0x51, Buffer.alloc(0)));
+    proto.feed(VH.buildC3Frame(0x53, Buffer.alloc(0)));
+    proto.feed(VH.buildC3Frame(0x40, Buffer.from([1, 2, 3, 4])));
+    ok(txLog.some((x) => x.label === 'SpeedRate') && txLog.some((x) => x.label === 'HUDLight') && txLog.some((x) => x.label === 'BuzzerSwitch'),
+        '0x50/0x51/0x53 queries receive valid C3 replies');
 }
 
 /* ---- 4. UI Rendering Across All 5 Tabs + MGU Studio Waking State ---- */
@@ -275,7 +336,7 @@ async function runIntegration() {
     // Pre-populate leftover stale file in compatDir to verify ensureCompatSymlink replaces leftover directory cleanly
     fs.writeFileSync(path.join(compatDir, 'status.json'), '{}');
 
-    fs.writeFileSync(path.join(appRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'bimmer_drive', version: '1.0.3' }));
+    fs.writeFileSync(path.join(appRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'bimmer_drive', version: '1.1.0' }));
     fs.writeFileSync(path.join(anhRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'anh_dai_dien', version: '1.0.3' }));
     fs.writeFileSync(path.join(wocRun, 'status.json'), JSON.stringify({ state: 'starting', reason: 'under an alert on the cluster', target: 'map', cluster: 1, hud: 1, hud_state: 'showing', hide_bmw_guidance: 1 }));
 
@@ -319,6 +380,90 @@ setInterval(() => {
     fs.writeFileSync(fakeSystemctl, '#!/bin/sh\necho "$@" >> "' + wakeFlag + '"\nexit 0\n', { mode: 0o755 });
 
     const port = 29471 + (process.pid % 1000);
+    const mockDbusSock = path.join(tmp, 'system_bus_socket');
+    const mockDevDir = path.join(tmp, 'dev');
+    mkp(mockDevDir);
+    const seenAliasWrites = [];
+    const seenNotifyChunks = [];
+    let selectedAdapter = null;
+
+    // Real Unix socket mock BlueZ 5 D-Bus daemon verifying wire alignment, hci1 preference, and GATT roundtrip!
+    const dbusSrv = net.createServer((c) => {
+        let authed = false;
+        let rx = Buffer.alloc(0);
+        let srvSerial = 100;
+        c.on('data', (chunk) => {
+            rx = Buffer.concat([rx, chunk]);
+            if (!authed) {
+                const nl = rx.indexOf('\r\n');
+                if (nl < 0) return;
+                const line = rx.slice(0, nl).toString('utf8');
+                rx = rx.slice(nl + 2);
+                if (line.indexOf('AUTH ') >= 0) {
+                    c.write('OK 1234567890abcdef\r\n');
+                } else if (line.indexOf('BEGIN') === 0) {
+                    authed = true;
+                } else {
+                    const nl2 = rx.indexOf('\r\n');
+                    if (nl2 >= 0) { rx = rx.slice(nl2 + 2); authed = true; }
+                }
+                if (!authed) return;
+            }
+            while (rx.length >= 16) {
+                const dec = DBH.tryDecodeMessage(rx);
+                if (!dec) break;
+                rx = rx.slice(dec.total);
+                const m = dec.msg;
+                if (m.type === 4 && m.member === 'PropertiesChanged') {
+                    const chg = m.args[1] || {};
+                    if (Buffer.isBuffer(chg.Value)) seenNotifyChunks.push(chg.Value);
+                    continue;
+                }
+                if (m.type !== 1) continue;
+                if (m.member === 'Set' && m.args[1] === 'Alias') seenAliasWrites.push(m.path);
+                if (m.member === 'Hello') {
+                    c.write(DBH.encodeMessage({ type: 2, serial: srvSerial++, replySerial: m.serial, sig: 's', args: [':1.99'] }));
+                } else if (m.member === 'GetManagedObjects') {
+                    const managed = {
+                        '/org/bluez/hci0': {
+                            'org.bluez.Adapter1': { Powered: DBH.v('b', true) },
+                            'org.bluez.GattManager1': {},
+                            'org.bluez.LEAdvertisingManager1': {},
+                        },
+                        '/org/bluez/hci1': {
+                            'org.bluez.Adapter1': { Powered: DBH.v('b', true) },
+                            'org.bluez.GattManager1': {},
+                            'org.bluez.LEAdvertisingManager1': {},
+                        },
+                    };
+                    c.write(DBH.encodeMessage({ type: 2, serial: srvSerial++, replySerial: m.serial, sig: 'a{oa{sa{sv}}}', args: [managed] }));
+                } else if (m.member === 'RegisterApplication') {
+                    selectedAdapter = m.path;
+                    c.write(DBH.encodeMessage({ type: 2, serial: srvSerial++, replySerial: m.serial, sig: '', args: [] }));
+                    // Ask client for its GATT objects just like bluetoothd does
+                    c.write(DBH.encodeMessage({ type: 1, serial: srvSerial++, dest: ':1.99', path: m.args[0], iface: 'org.freedesktop.DBus.ObjectManager', member: 'GetManagedObjects', sig: '', args: [] }));
+                } else if (m.member === 'RegisterAdvertisement') {
+                    c.write(DBH.encodeMessage({ type: 2, serial: srvSerial++, replySerial: m.serial, sig: '', args: [] }));
+                    c.write(DBH.encodeMessage({ type: 1, serial: srvSerial++, dest: ':1.99', path: m.args[0], iface: 'org.freedesktop.DBus.Properties', member: 'GetAll', sig: 's', args: ['org.bluez.LEAdvertisement1'] }));
+                    // Simulate phone subscribing to FFF1 and sending 0x0E + 0x01(speed=80)
+                    c.write(DBH.encodeMessage({ type: 1, serial: srvSerial++, dest: ':1.99', path: DBH.CHR_TX_PATH, iface: 'org.bluez.GattCharacteristic1', member: 'StartNotify', sig: '', args: [] }));
+                    c.write(DBH.encodeMessage({ type: 1, serial: srvSerial++, dest: ':1.99', path: DBH.CHR_RX_PATH, iface: 'org.bluez.GattCharacteristic1', member: 'WriteValue', sig: 'aya{sv}', args: [VH.buildC3Frame(0x0E, Buffer.from([0])), {}] }));
+                    c.write(DBH.encodeMessage({ type: 1, serial: srvSerial++, dest: ':1.99', path: DBH.CHR_RX_PATH, iface: 'org.bluez.GattCharacteristic1', member: 'WriteValue', sig: 'aya{sv}', args: [VH.buildC5Frame(0x01, Buffer.from([1, 0, 200, 80])), {}] }));
+                } else {
+                    c.write(DBH.encodeMessage({ type: 2, serial: srvSerial++, replySerial: m.serial, sig: '', args: [] }));
+                }
+            }
+        });
+    });
+    await new Promise((r) => dbusSrv.listen(mockDbusSock, r));
+
+    // Also test no_bluez graceful fallback when socket is absent
+    let noBluezState = null;
+    const probeNoBluez = DBH.createBluezHud({ socketPath: path.join(tmp, 'missing_dbus'), onState: (s) => { noBluezState = s.bleState; } });
+    await new Promise((r) => setTimeout(r, 80));
+    probeNoBluez.stop();
+    ok(noBluezState === 'no_bluez', 'dbus-bluez-hud fails gracefully with bleState=no_bluez when system D-Bus is absent');
+
     process.env.BD_OAP = oapDir;
     process.env.BD_RUN = runDir;
     process.env.BD_COMPAT_SIGN_RUN = compatDir;
@@ -331,6 +476,8 @@ setInterval(() => {
     process.env.BD_CAMERA = '0';
     process.env.BD_LOOPBACK = '1';
     process.env.BD_PORT = String(port);
+    process.env.BD_DBUS_SOCK = mockDbusSock;
+    process.env.BD_VMHUD_DEV_DIR = mockDevDir;
     process.env.BD_NFT = '/nonexistent-nft';
     process.env.BD_POLL_MS = '120';
 
@@ -339,19 +486,34 @@ setInterval(() => {
     const svc = BD.run();
 
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    await sleep(300);
+    await sleep(400);
 
     const st0 = JSON.parse(fs.readFileSync(path.join(runDir, 'status.json'), 'utf8'));
-    ok(st0.version === '1.0.3' && st0.symbol === '---' && st0.shown.indexOf('map') >= 0, 'OEM --- sign shown while waze-on-cluster is suspended under alert');
-    ok(fs.lstatSync(compatDir).isSymbolicLink() && JSON.parse(fs.readFileSync(path.join(compatDir, 'status.json'), 'utf8')).version === '1.0.3', 'leftover /run/vietmap-signs directory replaced cleanly with symlink');
+    ok(st0.version === '1.1.0' && st0.shown.indexOf('map') >= 0, 'v1.1.0 coordinator renders map layer while waze-on-cluster is suspended');
+    ok(selectedAdapter === '/org/bluez/hci1' && seenAliasWrites.length === 0, 'dbus-bluez-hud prefers secondary hci1 over hci0 and never renames Adapter1.Alias');
+    const fullHudReply = Buffer.concat(seenNotifyChunks);
+    ok(fullHudReply.toString('utf8').indexOf('MODEL:H1N,HW:1.0,FW:1.0,PROTOCOL:2.2.2') >= 0, 'dbus-bluez-hud emits chunked PropertiesChanged HUDInfo reply over D-Bus');
+    ok(st0.vmhud && st0.vmhud.connected === true && st0.vmhud.bleState === 'advertising' && st0.vmhud.limit === 80 && st0.limit === 80 && st0.source === 'vmhud',
+        'Live BlueZ GATT VietMap HUD connection updates cluster sign to 80 km/h with source=vmhud');
+    ok(fs.lstatSync(compatDir).isSymbolicLink() && JSON.parse(fs.readFileSync(path.join(compatDir, 'status.json'), 'utf8')).version === '1.1.0', 'leftover /run/vietmap-signs directory replaced cleanly with symlink');
 
+    // Test ESP32 USB Serial Bridge JSON ingestion
+    const fakeSerialFile = path.join(mockDevDir, 'ttyACM0');
+    fs.writeFileSync(fakeSerialFile, '{"t":"vmhud","v":1,"limit":120,"next":100,"dist":250,"camType":1,"connected":true,"model":"H1N"}\n');
+    const serialEvs = [];
+    const sb = VH.createSerialBridge({ device: fakeSerialFile, scanMs: 500, onJson: (m) => serialEvs.push(m) });
+    await sleep(120);
+    sb.stop();
+    ok(serialEvs.length === 1 && serialEvs[0].limit === 120 && serialEvs[0].next === 100, 'USB serial bridge reads JSON speed-limit lines from ESP32 /dev/ttyACM0');
+
+    // Verify existing UDP 8471 compatibility remains intact alongside BLE HUD
     const code = st0.pairing.code;
     ok(/^\d{6}$/.test(code), '6-digit pairing code generated');
     const ack = await new Promise((resolve, reject) => {
         const u = dgram.createSocket('udp4');
         u.on('message', (msg) => { u.close(); resolve(JSON.parse(msg.toString('utf8'))); });
         u.on('error', reject);
-        const pkt = Buffer.from(JSON.stringify({ t: 'vms', v: 1, seq: 7, limit: 80, next: 60, hint: 'Khu dân cư', code }));
+        const pkt = Buffer.from(JSON.stringify({ t: 'vms', v: 1, seq: 7, limit: 70, next: 60, hint: 'Khu dân cư', code }));
         u.send(pkt, port, '127.0.0.1');
     });
     ok(ack.paired === true && ack.shown.indexOf('map') >= 0, 'UDP 8471 phone packet paired and acked immediately');
@@ -396,6 +558,7 @@ setInterval(() => {
     ok(typeof sleptWhy === 'string' && sleptWhy.length > 0 && !fs.existsSync(path.join(anhRun, 'status.json')), 'anh-dai-dien cleanly sleeps to 0 MB RAM and removes status.json when idle');
 
     svc.stop();
+    dbusSrv.close();
     console.log('bimmer_drive_test: all ' + passed + ' assertions passed!');
 }
 

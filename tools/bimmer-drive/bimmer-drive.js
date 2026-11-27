@@ -29,8 +29,10 @@ const jpeg = require('./jpeg');
 const signread = require('./signread');
 const signsCam = require('./signs-cam');
 const wocMirror = require('./woc-mirror');
+const vmHud = require('./vm-hud');
+const dbusBluezHud = require('./dbus-bluez-hud');
 
-const VERSION = '1.0.3';
+const VERSION = '1.1.0';
 const env = (k, d) => (process.env[k] !== undefined && process.env[k] !== '' ? process.env[k] : d);
 
 const CFG = {
@@ -55,6 +57,11 @@ const CFG = {
     crClient: env('BD_CR_CLIENT', '/var/opt/cluster-render/current/cluster_render_client.js'),
     crSocket: env('BD_CR_SOCKET', ''),
     phoneStaleMs: Number(env('BD_PHONE_STALE_MS', 5000)),
+    vmHud: env('BD_VMHUD', '1') !== '0',
+    dbusSock: env('BD_DBUS_SOCK', '/var/run/dbus/system_bus_socket'),
+    vmhudStaleMs: Number(env('BD_VMHUD_STALE_MS', 15000)),
+    vmhudSerial: env('BD_VMHUD_SERIAL', ''),
+    vmhudDevDir: env('BD_VMHUD_DEV_DIR', '/dev'),
     wocStaleMs: Number(env('BD_WOC_STALE_MS', 30000)),
     ruleMs: Number(env('BD_RULE_MS', 30000)),
     loopback: env('BD_LOOPBACK', '') === '1',
@@ -507,6 +514,11 @@ function paired(p, addr, now) {
 }
 
 const phone = { from: null, at: 0, seq: null, limit: null, next: null, hint: null, test: false, ver: null, packets: 0, ignored: 0, bad: 0 };
+const vmhud = {
+    transport: null, connected: false, model: null, at: 0,
+    limit: null, next: null, nextDist: null, camType: null, camDist: null, hint: null,
+    packets: 0, bleState: 'off', bleAdapter: null, bleError: null, usbDev: null,
+};
 
 function ipv4ToInt(a) { return a.split('.').reduce((n, x) => ((n << 8) >>> 0) + (Number(x) & 255), 0) >>> 0; }
 function allowedSender(addr) {
@@ -930,10 +942,12 @@ function decideSigns(ctrl, nativeState, nativeFresh, isVmcGrabbing, now) {
     const clusterSurface = woc.map || frontOn;
     const phoneFresh = !!(d.phone !== false && phone.at && now - phone.at < CFG.phoneStaleMs);
     const phoneLimit = phoneFresh && phone.limit ? phone.limit : 0;
+    const vmhudFresh = !!(d.phone !== false && vmhud.at && now - vmhud.at < (vmhud.connected ? 60000 : CFG.vmhudStaleMs));
+    const vmhudLimit = vmhudFresh && vmhud.limit ? vmhud.limit : 0;
     const placing = ctrl.pvFresh;
 
     const camLimit = d.on && d.camera ? signsCam.current(camState, now, log) : 0;
-    const reading = d.on && d.screen && !isVmcGrabbing && !camLimit && !phoneFresh && !placing && (clusterSurface || woc.hud) && renderer.installed !== false
+    const reading = d.on && d.screen && !isVmcGrabbing && !camLimit && !phoneFresh && !vmhudFresh && !placing && (clusterSurface || woc.hud) && renderer.installed !== false
         && (fs.existsSync(CFG.grabber) || !path.isAbsolute(CFG.grabber));
     if (reading && !screen.running && now - screen.startedAt >= CFG.screenMs) shootScreen(now);
     const onScreen = reading && screen.at && now - screen.at < CFG.screenStaleMs ? screen.limit : 0;
@@ -941,11 +955,11 @@ function decideSigns(ctrl, nativeState, nativeFresh, isVmcGrabbing, now) {
 
     const preferPhone = d.source === 'vietmap' || d.source === 'vietmap_only';
     const source = preferPhone
-        ? (phoneLimit ? 'phone' : camLimit ? 'camera' : onScreen ? 'screen' : mapLimit ? 'bmwmap' : placing ? 'preview' : null)
-        : (camLimit ? 'camera' : phoneLimit ? 'phone' : onScreen ? 'screen' : mapLimit ? 'bmwmap' : placing ? 'preview' : null);
+        ? (vmhudLimit ? 'vmhud' : phoneLimit ? 'phone' : camLimit ? 'camera' : onScreen ? 'screen' : mapLimit ? 'bmwmap' : placing ? 'preview' : null)
+        : (camLimit ? 'camera' : vmhudLimit ? 'vmhud' : phoneLimit ? 'phone' : onScreen ? 'screen' : mapLimit ? 'bmwmap' : placing ? 'preview' : null);
     const limit = preferPhone
-        ? (phoneLimit || camLimit || onScreen || mapLimit || (placing ? PREVIEW_LIMIT : null))
-        : (camLimit || phoneLimit || onScreen || mapLimit || (placing ? PREVIEW_LIMIT : null));
+        ? (vmhudLimit || phoneLimit || camLimit || onScreen || mapLimit || (placing ? PREVIEW_LIMIT : null))
+        : (camLimit || vmhudLimit || phoneLimit || onScreen || mapLimit || (placing ? PREVIEW_LIMIT : null));
     const symbol = limit || (d.on && d.empty !== 'hide' && !placing ? '---' : null);
     const g = geometry(d, woc);
     const wantMap = d.on && d.show !== 'hud', wantHud = d.on && d.show !== 'cluster';
@@ -973,8 +987,8 @@ function decideSigns(ctrl, nativeState, nativeFresh, isVmcGrabbing, now) {
     else if (limit && !(wantMap && clusterSurface) && !(wantHud && woc.hud)) why = 'Waze on cluster shows no map there';
     else if (reading && !limit) why = screen.error ? 'the centre screen cannot be read' : 'no sign on the centre screen';
     else if (!limit && d.phone === false) why = 'no sign on this road';
-    else if (!limit && !phone.at) why = d.bmwMap && camState.map.ready ? 'no sign on this road' : 'no phone yet';
-    else if (!limit && !phoneFresh) why = d.bmwMap && camState.map.ready ? 'no sign on this road' : 'the phone stopped sending';
+    else if (!limit && !phone.at && !vmhud.at) why = d.bmwMap && camState.map.ready ? 'no sign on this road' : 'no phone yet';
+    else if (!limit && !phoneFresh && !vmhudFresh) why = d.bmwMap && camState.map.ready ? 'no sign on this road' : 'the phone stopped sending';
     else if (!limit) why = 'no sign in VietMap';
 
     return {
@@ -1215,7 +1229,8 @@ function run() {
 
         const statusKey = JSON.stringify([
             sentView, fps, nativeFresh ? native.shown : 0, nativeFresh ? native.layer : '', nativeFresh ? native.aux_shown : 0,
-            lastSignSummary, s.over, s.source, phone.from, phone.packets, vmc.on, vmc.running, vmc.error, navInfo.state, navInfo.last,
+            lastSignSummary, s.over, s.source, phone.from, phone.packets, vmhud.connected, vmhud.limit, vmhud.bleState, vmhud.usbDev,
+            vmc.on, vmc.running, vmc.error, navInfo.state, navInfo.last,
         ]);
         if (statusKey !== lastStatusKey || now - lastWriteAt >= 950) {
             lastStatusKey = statusKey;
@@ -1245,6 +1260,24 @@ function run() {
                 from: phone.from, at: phone.at ? new Date(phone.at).toISOString() : null, ago_ms: phone.at ? now - phone.at : null,
                 seq: phone.seq, limit: phone.limit, next: phone.next || null, hint: phone.hint || null, test: phone.test,
                 app: phone.ver, packets: phone.packets, ignored: phone.ignored, bad: phone.bad,
+            },
+            vmhud: {
+                transport: vmhud.transport,
+                connected: vmhud.connected,
+                model: vmhud.model,
+                at: vmhud.at ? new Date(vmhud.at).toISOString() : null,
+                ago_ms: vmhud.at ? now - vmhud.at : null,
+                limit: vmhud.limit,
+                next: vmhud.next,
+                next_dist: vmhud.nextDist,
+                cam_type: vmhud.camType,
+                cam_dist: vmhud.camDist,
+                hint: vmhud.hint,
+                packets: vmhud.packets,
+                bleState: vmhud.bleState,
+                bleAdapter: vmhud.bleAdapter,
+                bleError: vmhud.bleError,
+                usbDev: vmhud.usbDev,
             },
             limit: s.limit,
             symbol: lastSignSummary.symbol,
@@ -1288,6 +1321,75 @@ function run() {
         try { writeAtomic(STATUS_FILE(), JSON.stringify(st) + '\n', 0o644); } catch (e) {}
     }
 
+    function onVmHudEvent(transport, ev) {
+        const now = Date.now();
+        vmhud.at = now;
+        vmhud.transport = transport;
+        vmhud.packets++;
+        if (ev.kind === 'handshake') {
+            vmhud.connected = true;
+            vmhud.model = ev.model || 'H1N';
+            log('vm-hud (' + transport + '): connected ' + vmhud.model);
+        } else if (ev.kind === 'camera') {
+            vmhud.connected = true;
+            const newLimit = ev.limit ? ev.limit : null;
+            if (vmhud.limit !== newLimit) log('vm-hud (' + transport + '): sign -> ' + (newLimit || 'none'));
+            vmhud.limit = newLimit;
+            vmhud.next = ev.next || null;
+            vmhud.nextDist = ev.nextDist !== undefined ? ev.nextDist : null;
+            vmhud.camType = ev.camType !== undefined ? ev.camType : null;
+            vmhud.camDist = ev.camDist !== undefined ? ev.camDist : null;
+            vmhud.hint = ev.hint || null;
+        }
+        try { coordinate(now); } catch (e) { log('vmhud tick: ' + e.message); }
+    }
+
+    let bluezHud = null;
+    let serialBridge = null;
+    if (CFG.vmHud) {
+        bluezHud = dbusBluezHud.createBluezHud({
+            socketPath: CFG.dbusSock,
+            log,
+            onState: (st) => {
+                if (st.bleState !== undefined) vmhud.bleState = st.bleState;
+                if (st.bleAdapter !== undefined) vmhud.bleAdapter = st.bleAdapter;
+                if (st.bleError !== undefined) vmhud.bleError = st.bleError;
+                try { coordinate(Date.now()); } catch (e) {}
+            },
+            onUpdate: (ev) => onVmHudEvent('ble', ev),
+        });
+        serialBridge = vmHud.createSerialBridge({
+            device: CFG.vmhudSerial,
+            devDir: CFG.vmhudDevDir,
+            log,
+            onState: (st) => {
+                if (st.usbDev !== undefined) vmhud.usbDev = st.usbDev;
+                if (!st.usbDev && vmhud.transport === 'usb') {
+                    vmhud.connected = false;
+                    vmhud.limit = null;
+                }
+                try { coordinate(Date.now()); } catch (e) {}
+            },
+            onFrame: (ev) => onVmHudEvent('usb', ev),
+            onJson: (msg) => {
+                const now = Date.now();
+                const lim = Number(msg.limit);
+                vmhud.at = now;
+                vmhud.transport = 'usb';
+                vmhud.connected = msg.connected !== false;
+                vmhud.model = typeof msg.model === 'string' ? msg.model.slice(0, 20) : (vmhud.model || 'H1N');
+                vmhud.limit = Number.isInteger(lim) && lim >= 5 && lim <= 199 ? lim : null;
+                const nxt = Number(msg.next);
+                vmhud.next = Number.isInteger(nxt) && nxt >= 5 && nxt <= 199 ? nxt : null;
+                vmhud.camDist = Number.isFinite(Number(msg.dist)) ? Number(msg.dist) : null;
+                vmhud.camType = Number.isFinite(Number(msg.camType)) ? Number(msg.camType) : null;
+                vmhud.hint = vmHud.camTypeHint(vmhud.camType);
+                vmhud.packets++;
+                try { coordinate(now); } catch (e) {}
+            },
+        });
+    }
+
     listenUdp(() => { try { coordinate(Date.now()); } catch (e) { log('udp tick: ' + e.message); } });
     startSidecam();
     const timer = setInterval(() => { try { coordinate(Date.now()); } catch (e) { log('tick: ' + e.message); } }, CFG.pollMs);
@@ -1301,6 +1403,8 @@ function run() {
         if (restartTimer) clearTimeout(restartTimer);
         flashing(false);
         manageProbe(false, Date.now());
+        if (bluezHud) bluezHud.stop();
+        if (serialBridge) serialBridge.stop();
         if (someipHub) someipHub.stop();
         mirror.shutdown(systemStopping());
         if (ctlServer) { try { ctlServer.close(); } catch (e) {} }
@@ -1341,11 +1445,16 @@ if (require.main === module) {
 
 module.exports = {
     VERSION, CFG, SIZES, BLINK, drawSign, configLine, auxLine, arLine, geometry, wocStatus,
-    parsePacket, allowedSender, paired, pairCode, setCode, pair, phone, decideSigns, camState,
+    parsePacket, allowedSender, paired, pairCode, setCode, pair, phone, vmhud, decideSigns, camState,
     ensureRules, removeRules, ourRules, listenUdp, readControlState, run, deactivate,
     _reset: () => {
         appCache = null; appScanAt = 0; anhCache = null; anhScanAt = 0;
         appRun.dir = null; appRun.checkedAt = 0; appRun.proc = null; appRun.procAt = 0;
         liveControl = null; liveControlDir = null; labelSeq = null;
+        Object.assign(vmhud, {
+            transport: null, connected: false, model: null, at: 0,
+            limit: null, next: null, nextDist: null, camType: null, camDist: null, hint: null,
+            packets: 0, bleState: 'off', bleAdapter: null, bleError: null, usbDev: null,
+        });
     },
 };

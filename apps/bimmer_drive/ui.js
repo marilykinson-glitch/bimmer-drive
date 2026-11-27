@@ -161,9 +161,9 @@ function drawSignsAndMirror(cv, G, t, v, act) {
 
     // Left column: Speed Sign + Pairing Code Box
     const cx = 250, cy = G.TOP + 132, R = 86;
-    drawSignDisc(cv, cx, cy, R, sr.limit || sr.phoneLimit, t, G, sr.dashes && v.signOn);
+    drawSignDisc(cv, cx, cy, R, sr.limit || sr.vmhudLimit || sr.phoneLimit, t, G, sr.dashes && v.signOn);
     const srcLabel = sr.limit
-        ? (sr.source === 'camera' ? 'Nguồn: Camera KAFAS BMW' : sr.source === 'phone' ? 'Nguồn: VietMap Live (ĐT)' : sr.source === 'bmwmap' ? 'Nguồn: Bản đồ BMW' : 'Đang hiện trên đồng hồ')
+        ? (sr.source === 'camera' ? 'Nguồn: Camera KAFAS BMW' : sr.source === 'vmhud' ? 'Nguồn: VietMap HUD (BLE/USB)' : sr.source === 'phone' ? 'Nguồn: VietMap Live (ĐT)' : sr.source === 'bmwmap' ? 'Nguồn: Bản đồ BMW' : 'Đang hiện trên đồng hồ')
         : sr.dashes && v.signOn ? 'Chưa có biển · hiện --- chuẩn BMW' : 'Chưa có giới hạn tốc độ';
     cv.text(srcLabel, cx, cy + R + 28, 16, t.dim, { literal: true, align: 'center', font: 'label' });
 

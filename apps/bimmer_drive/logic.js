@@ -452,15 +452,28 @@ function signReport(st, s) {
             note: 'Kiểm tra trợ thủ trong MGU Store', noteKind: 'warn',
         };
     }
-    const p = st.phone || {}, pr = st.pairing || {}, c = st.camera || {}, bm = st.bmwmap || {};
+    const p = st.phone || {}, vh = st.vmhud || {}, pr = st.pairing || {}, c = st.camera || {}, bm = st.bmwmap || {};
     const unpaired = !!(pr.on && pr.refused && pr.ago_ms !== null && pr.ago_ms < 10000 && !(p.at && p.ago_ms < pr.ago_ms));
     const ago = (ms) => (ms === null || ms === undefined ? '' : ms < 2000 ? 'vừa xong' : Math.round(ms / 1000) + ' giây trước');
+
+    if (vh.connected) {
+        const via = vh.transport === 'usb' ? 'USB' : 'BLE';
+        lines.push({ text: 'VietMap HUD (' + via + '): đã nối ' + (vh.model || 'H1N') + (vh.limit ? ' · biển ' + vh.limit : ''), kind: 'go' });
+    } else if (vh.bleState === 'advertising') {
+        lines.push({ text: 'VietMap HUD (BLE): đang phát HUD(BLE) trên ' + (vh.bleAdapter || 'hci0'), kind: 'go' });
+    } else if (vh.usbDev) {
+        lines.push({ text: 'VietMap HUD (USB): đã gắn ' + vh.usbDev + ' · chờ VietMap Live', kind: 'dim' });
+    } else if (vh.bleState === 'no_bluez' || vh.bleState === 'no_adapter') {
+        lines.push({ text: 'VietMap HUD (BLE): xe không mở BlueZ · cắm ESP32 USB hoặc dùng ĐT', kind: 'dim' });
+    } else if (vh.bleError) {
+        lines.push({ text: 'VietMap HUD (BLE): ' + vh.bleError, kind: 'warn' });
+    }
 
     const srcMode = (s && s.signSource) || (st.settings && st.settings.source) || 'auto';
     if (srcMode === 'bmw_only') lines.push({ text: 'Điện thoại VietMap: đang chọn chỉ dùng nguyên bản BMW', kind: 'dim' });
     else if (unpaired) lines.push({ text: 'Điện thoại ' + pr.from + ': sai mã ghép 6 số', kind: 'warn' });
     else if (p.at) lines.push({ text: 'Điện thoại VietMap: ' + p.from + ' · ' + ago(p.ago_ms) + (p.limit ? ' · biển ' + p.limit : ''), kind: p.ago_ms < 5000 ? 'go' : 'warn' });
-    else lines.push({ text: 'Điện thoại VietMap: chưa kết nối', kind: bm.on && bm.ready ? 'dim' : 'warn' });
+    else lines.push({ text: 'Điện thoại VietMap: chưa kết nối', kind: (vh.connected || (bm.on && bm.ready)) ? 'dim' : 'warn' });
 
     if (c.on) {
         lines.push(c.error ? { text: 'Camera KAFAS BMW: ' + c.error, kind: 'warn' }
@@ -477,10 +490,14 @@ function signReport(st, s) {
                     : bm.low ? { text: 'Bản đồ BMW: bỏ mã ' + bm.cls + ' (' + bm.low + ' km/h hầm/nội bộ)', kind: 'dim' }
                         : { text: 'Bản đồ BMW: không có biển' + (bm.cls !== null && bm.cls !== undefined ? ' · mã ' + bm.cls : ''), kind: 'dim' });
     }
-    if (p.at && p.ago_ms < 5000 && (p.next || p.hint)) {
+    const vhFresh = !!(vh.at && vh.ago_ms !== null && vh.ago_ms < 15000);
+    const pFresh = !!(p.at && p.ago_ms !== null && p.ago_ms < 5000);
+    const nextVal = (vhFresh && vh.next) || (pFresh && p.next) || null;
+    const hintVal = (vhFresh && vh.hint) || (pFresh && p.hint) || null;
+    if (nextVal || hintVal) {
         const parts = [];
-        if (p.next) parts.push('sắp tới ' + p.next);
-        if (p.hint) parts.push(p.hint);
+        if (nextVal) parts.push('sắp tới ' + nextVal);
+        if (hintVal) parts.push(hintVal);
         lines.push({ text: 'Cảnh báo VietMap: ' + parts.join(' · '), kind: 'go' });
     }
     const shown = st.shown || [];
@@ -505,7 +522,7 @@ function signReport(st, s) {
     const dashes = !st.limit && (st.symbol === '---' || (on && empty !== 'hide'));
     return {
         on, unpaired, limit: st.limit || null, dashes, symbol: st.symbol || null,
-        phoneLimit: p.limit || null, source: st.source || null, lines, note, noteKind,
+        vmhudLimit: vh.limit || null, phoneLimit: p.limit || null, source: st.source || null, lines, note, noteKind,
     };
 }
 

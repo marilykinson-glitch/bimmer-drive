@@ -425,7 +425,7 @@ mgu.run({
                 signOn: s.signMode !== 'off', signEmpty: s.signEmpty, signShowLabel: label('signShow'),
                 signShowShort: s.signShow === 'cluster' ? 'Đồng hồ' : s.signShow === 'hud' ? 'HUD' : 'Cả hai',
                 signSizeLabel: label('signSize'),
-                signLimit: sr.limit || sr.phoneLimit, signDashes: sr.dashes, signReport: sr,
+                signLimit: sr.limit || sr.vmhudLimit || sr.phoneLimit, signDashes: sr.dashes, signReport: sr,
                 signMap, signHud, signDragging: !!dragSign,
                 hudBox: st && st.waze && st.waze.hudBox,
                 pairCode: st && st.pairing && st.pairing.code ? String(st.pairing.code) : null,
@@ -459,7 +459,7 @@ mgu.run({
             const fresh = n && n.picture_age_ms >= 0 && n.picture_age_ms < 1500;
             const signalOk = lightState === 'Đã kết nối';
             const signTxt = !v.signOn ? 'Đang tắt'
-                : sr.limit ? ('Biển ' + sr.limit + ' km/h (' + (sr.source === 'camera' ? 'Camera BMW' : sr.source === 'phone' ? 'VietMap ĐT' : sr.source === 'bmwmap' ? 'Bản đồ BMW' : 'Màn giữa') + ')' + (st && st.over ? ' · VƯỢT TỐC' : ''))
+                : sr.limit ? ('Biển ' + sr.limit + ' km/h (' + (sr.source === 'camera' ? 'Camera BMW' : sr.source === 'vmhud' ? 'VietMap HUD' : sr.source === 'phone' ? 'VietMap ĐT' : sr.source === 'bmwmap' ? 'Bản đồ BMW' : 'Màn giữa') + ')' + (st && st.over ? ' · VƯỢT TỐC' : ''))
                     : sr.dashes ? 'Đang hiện --- (chưa có biển)' : 'Chưa có biển';
             v.rows = [
                 { label: 'Xi nhan', text: SIDE[blinker.state()] + (signalOk ? '' : ' (' + lightState + ')'), kind: signalOk ? (blinker.state() === 'WAITING' ? 'dim' : 'go') : 'warn' },
