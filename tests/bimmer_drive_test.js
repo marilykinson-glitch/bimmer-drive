@@ -215,6 +215,15 @@ function ok(cond, msg) {
     }, { signMode: 'on', signEmpty: 'dashes', signSource: 'vietmap' });
     ok(repVm.vmhudLimit === 80 && repVm.lines.some((l) => l.text.indexOf('VietMap HUD (BLE): đã nối H1N') >= 0),
         'signReport renders VietMap HUD BLE live connection line and next-limit alert');
+
+    // Camera ahead from the USB bridge: alert layers beside the sign
+    Object.assign(BD.vmhud, { transport: 'usb', connected: true, model: 'H1N', at: now, limit: 50, alert: { type: 1, dist: 347, speed: 60 } });
+    const dAl = BD.decideSigns(mkCtrl('vietmap'), null, false, false, now);
+    ok(dAl.alert && dAl.hudAlert.metres === 350 && dAl.mapAlert.metres === null
+        && Math.abs(dAl.mapAlert.x - dAl.map.x) >= dAl.map.size && Math.abs(dAl.hudAlert.x - dAl.hud.x) >= dAl.hud.size && dAl.mapAlert.y === dAl.map.y,
+        'decideSigns puts the camera alert beside the sign (metres on the HUD only)');
+    BD.vmhud.alert = null;
+    ok(BD.decideSigns(mkCtrl('vietmap'), null, false, false, now).hudAlert.visible === false, 'no camera ahead: no alert layer');
     BD._reset();
 }
 
@@ -336,7 +345,7 @@ async function runIntegration() {
     // Pre-populate leftover stale file in compatDir to verify ensureCompatSymlink replaces leftover directory cleanly
     fs.writeFileSync(path.join(compatDir, 'status.json'), '{}');
 
-    fs.writeFileSync(path.join(appRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'bimmer_drive', version: '1.1.3' }));
+    fs.writeFileSync(path.join(appRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'bimmer_drive', version: '1.1.4' }));
     fs.writeFileSync(path.join(anhRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'anh_dai_dien', version: '1.0.3' }));
     fs.writeFileSync(path.join(wocRun, 'status.json'), JSON.stringify({ state: 'starting', reason: 'under an alert on the cluster', target: 'map', cluster: 1, hud: 1, hud_state: 'showing', hide_bmw_guidance: 1 }));
 
@@ -499,13 +508,13 @@ setInterval(() => {
     await sleep(400);
 
     const st0 = JSON.parse(fs.readFileSync(path.join(runDir, 'status.json'), 'utf8'));
-    ok(st0.version === '1.1.3' && st0.shown.indexOf('map') >= 0, 'v1.1.3 coordinator renders map layer while waze-on-cluster is suspended');
+    ok(st0.version === '1.1.4' && st0.shown.indexOf('map') >= 0, 'v1.1.4 coordinator renders map layer while waze-on-cluster is suspended');
     ok(selectedAdapter === '/org/bluez/hci1' && seenAliasWrites.length === 0, 'dbus-bluez-hud prefers secondary hci1 over hci0 and never renames Adapter1.Alias');
     const fullHudReply = Buffer.concat(seenNotifyChunks);
     ok(fullHudReply.toString('utf8').indexOf('MODEL:H1N,HW:1.0,FW:1.0,PROTOCOL:2.2.2') >= 0, 'dbus-bluez-hud emits chunked PropertiesChanged HUDInfo reply over D-Bus');
     ok(st0.vmhud && st0.vmhud.connected === true && st0.vmhud.bleState === 'advertising' && st0.vmhud.bleDetail === 'hci1 ok' && st0.vmhud.limit === 80 && st0.limit === 80 && st0.source === 'vmhud',
         'Live BlueZ GATT VietMap HUD connection updates cluster sign to 80 km/h with source=vmhud');
-    ok(fs.lstatSync(compatDir).isSymbolicLink() && JSON.parse(fs.readFileSync(path.join(compatDir, 'status.json'), 'utf8')).version === '1.1.3', 'leftover /run/vietmap-signs directory replaced cleanly with symlink');
+    ok(fs.lstatSync(compatDir).isSymbolicLink() && JSON.parse(fs.readFileSync(path.join(compatDir, 'status.json'), 'utf8')).version === '1.1.4', 'leftover /run/vietmap-signs directory replaced cleanly with symlink');
 
     // Test ESP32 USB Serial Bridge: must IGNORE BMW internal ttyACM0 (no allowlisted idVendor) and ACCEPT ESP32 VID 303a
     const mockSysTty = path.join(tmp, 'sys-tty');
@@ -531,6 +540,17 @@ setInterval(() => {
     ok(openedDevs.indexOf(internalTty) < 0 && openedDevs.indexOf(espTty) >= 0 && serialEvs.length === 1 && serialEvs[0].limit === 120 && serialEvs[0].next === 100,
         'USB serial bridge ignores internal ttyACM0 and opens ESP32 (VID 303a) ttyACM1');
 
+    // Bridge v2 "cams": the sign is the type-0 tuple, any other tuple with a real distance is a camera ahead
+    const sc0 = VH.splitCams([[1, 34464, 0], [0, 100, 50]]);
+    ok(sc0.known && sc0.limit === 50 && sc0.alert === null, 'splitCams: frame seen at rest gives sign 50 and no camera (34464 = nothing ahead)');
+    const sc1 = VH.splitCams([[1, 347, 60], [0, 100, 50]]);
+    ok(sc1.limit === 50 && sc1.alert && sc1.alert.type === 1 && sc1.alert.dist === 347 && sc1.alert.speed === 60, 'splitCams: a camera 347 m ahead is the alert, the sign stays 50');
+    const sc2 = VH.splitCams([[2, 800, 0], [3, 120, 0], [0, 100, 80], 'x', [0, 5]]);
+    ok(sc2.limit === 80 && sc2.alert.type === 3 && sc2.alert.dist === 120 && sc2.alert.speed === null, 'splitCams: nearest camera wins, bad tuples are skipped');
+    ok(VH.splitCams(undefined).known === false && VH.splitCams([]).limit === null, 'splitCams: an old bridge without cams is told apart from an empty list');
+    ok(BD.alertMetres(347) === 350 && BD.alertMetres(4) === 10 && BD.alertMetres(1234) === 1250 && BD.alertMetres(0) === null, 'alertMetres rounds to 10 m below 1 km and 50 m above');
+    const pxAl = BD.drawAlert(80, 350), pxAlIcon = BD.drawAlert(128, null);
+    ok(pxAl.length === 80 * 80 * 4 && pxAlIcon.length === 128 * 128 * 4 && pxAl[(40 * 80 + 40) * 4 + 3] === 255 && pxAl[3] === 0, 'drawAlert draws an opaque plate with clear corners');
     // The BLE name VietMap Live 3.4.5 lists AND connects over BLE GATT (measured on a phone)
     ok(VH.ADV_NAME === 'vietmap-HUD_V3(BLE)', 'bridge advertises the name VietMap Live connects to over BLE');
 

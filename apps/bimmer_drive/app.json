@@ -2,7 +2,7 @@
   "id": "bimmer_drive",
   "title": "Camera & VietMap",
   "description": "Tích hợp 3-trong-1 mượt mà cho BMW MGU iDrive 7: Camera xi nhan trong vòng đồng hồ, Camera trước kèm mũi tên dẫn đường AR, Biển báo tốc độ Việt Nam (VietMap Live + Camera KAFAS + Bản đồ BMW, kèm biển --- chuẩn hãng và vẽ trực tiếp lên Camera trước) và Chiếu màn hình giữa lên đồng hồ.",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "startType": "autostart",
   "vendor": "custom",
   "loggingId": "OBDR",

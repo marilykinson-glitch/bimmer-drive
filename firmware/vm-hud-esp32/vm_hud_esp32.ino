@@ -65,6 +65,12 @@ static int nextLimit = 0;
 static int currentDist = 0;
 static int currentCamType = 0;
 
+/* Nguyên văn các bộ (loại, khoảng cách m, tốc độ) trong gói 0x01 mới nhất. bimmer-drive tự tách
+   biển tốc độ và cảnh báo camera từ đây, nên đổi cách hiểu không cần nạp lại firmware. */
+#define MAX_CAMS 6
+static uint8_t camTuples[MAX_CAMS][4];
+static uint8_t camCount = 0;
+
 /* ---- Hàng đợi nhận: onWrite chỉ chép gói vào đây, loop() lấy ra xử lý ---- */
 #define RXQ_SLOTS 16
 struct RxItem { uint16_t len; uint8_t data[512]; };
@@ -148,17 +154,28 @@ static void sendHudInfo() {
 static void emitJson() {
     lastEmitMs = millis();
     long camAge = lastCamMs ? (long)(millis() - lastCamMs) : -1;
+    char cams[MAX_CAMS * 16 + 4];
+    size_t n = 0;
+    cams[n++] = '[';
+    for (uint8_t i = 0; i < camCount && bleConnected; i++) {
+        unsigned dist = ((unsigned)camTuples[i][1] << 8) | camTuples[i][2];
+        n += snprintf(cams + n, sizeof(cams) - n, "%s[%u,%u,%u]", i ? "," : "", camTuples[i][0], dist, camTuples[i][3]);
+    }
+    cams[n++] = ']';
+    cams[n] = 0;
     Serial.printf(
-        "{\"t\":\"vmhud\",\"v\":1,\"limit\":%d,\"next\":%d,\"dist\":%d,\"camType\":%d,\"connected\":%s,\"model\":\"H1N\",\"camAgeMs\":%ld,\"camFrames\":%lu,\"rxDrop\":%lu,\"rxPartial\":%lu}\n",
+        "{\"t\":\"vmhud\",\"v\":2,\"limit\":%d,\"next\":%d,\"dist\":%d,\"camType\":%d,\"connected\":%s,\"model\":\"H1N\",\"camAgeMs\":%ld,\"camFrames\":%lu,\"rxDrop\":%lu,\"rxPartial\":%lu,\"cams\":%s}\n",
         currentLimit, nextLimit, currentDist, currentCamType,
         bleConnected ? "true" : "false", camAge, (unsigned long)camFrames,
-        (unsigned long)rxDropped, (unsigned long)rxPartial);
+        (unsigned long)rxDropped, (unsigned long)rxPartial, cams);
 }
 
 static void handleCameraTuples(const uint8_t* data, size_t count) {
     if (count == 0) return;
     lastCamMs = millis();
     camFrames++;
+    camCount = (uint8_t)(count > MAX_CAMS ? MAX_CAMS : count);
+    memcpy(camTuples, data, (size_t)camCount * 4);
     int bestSpeed = 0, bestDist = 999999, bestType = data[0];
     int altSpeed = 0, altDist = 999999;
     for (size_t i = 0; i < count; i++) {
@@ -316,7 +333,7 @@ static void handleBleEvents() {
     if (!linked && !sawConnect && bleConnected) {
         bleConnected = false;
         sendWelcomePending = false;
-        currentLimit = 0; nextLimit = 0; currentDist = 0; currentCamType = 0;
+        currentLimit = 0; nextLimit = 0; currentDist = 0; currentCamType = 0; camCount = 0;
         rxLen = 0;
         clearRxQueue();
         emitJson();

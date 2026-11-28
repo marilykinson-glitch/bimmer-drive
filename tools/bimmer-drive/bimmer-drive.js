@@ -32,7 +32,7 @@ const wocMirror = require('./woc-mirror');
 const vmHud = require('./vm-hud');
 const dbusBluezHud = require('./dbus-bluez-hud');
 
-const VERSION = '1.1.3';
+const VERSION = '1.1.4';
 const env = (k, d) => (process.env[k] !== undefined && process.env[k] !== '' ? process.env[k] : d);
 
 const CFG = {
@@ -260,6 +260,85 @@ function drawSign(limit, S, warn) {
         }
     });
     return px;
+}
+
+/* ---------------- Camera alert icon (beside the sign; on the HUD with the metres left) ---------------- */
+
+function fillShape(px, S, colour, cover) {
+    for (let y = 0; y < S; y++) {
+        for (let x = 0; x < S; x++) {
+            const t = clamp01(cover(x + 0.5, y + 0.5));
+            if (t <= 0) continue;
+            const o = (y * S + x) * 4;
+            const a0 = px[o + 3] / 255, a = t + a0 * (1 - t);
+            for (let i = 0; i < 3; i++) px[o + i] = Math.round((colour[i] * t + px[o + i] * a0 * (1 - t)) / (a || 1));
+            px[o + 3] = Math.round(a * 255);
+        }
+    }
+}
+const sdRoundRect = (cx, cy, hw, hh, r) => (x, y) => {
+    const qx = Math.max(0, Math.abs(x - cx) - (hw - r)), qy = Math.max(0, Math.abs(y - cy) - (hh - r));
+    return 0.5 - (Math.sqrt(qx * qx + qy * qy) - r);
+};
+const sdCircle = (cx, cy, r) => (x, y) => 0.5 - (Math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)) - r);
+
+function drawDigits(px, S, text, cx, cy, height, maxW, colour) {
+    const D = digits();
+    const gs = String(text).split('').map((ch) => D.glyphs[ch]).filter(Boolean);
+    if (!gs.length) return;
+    let pen = 0;
+    const placed = gs.map((g) => { const p = { g, x: pen + g.left }; pen += g.adv; return p; });
+    const inkL = placed[0].x, inkR = placed[placed.length - 1].x + placed[placed.length - 1].g.w, inkW = inkR - inkL;
+    const k = Math.min(height / D.height, maxW / inkW);
+    const ox = cx - (inkW * k) / 2 - inkL * k, oy = cy - (D.height * k) / 2;
+    const SUB = [0.25, 0.75];
+    placed.forEach((p) => {
+        const x0 = Math.max(0, Math.floor(ox + p.x * k)), x1 = Math.min(S, Math.ceil(ox + (p.x + p.g.w) * k));
+        const y0 = Math.max(0, Math.floor(oy)), y1 = Math.min(S, Math.ceil(oy + D.height * k));
+        for (let y = y0; y < y1; y++) {
+            for (let x = x0; x < x1; x++) {
+                let cov = 0;
+                SUB.forEach((qy) => SUB.forEach((qx) => { cov += sampleGlyph(p.g, (x + qx - ox) / k - p.x - 0.5, (y + qy - oy) / k - 0.5); }));
+                const t = cov / (4 * 255);
+                if (t <= 0) continue;
+                const o = (y * S + x) * 4;
+                for (let i = 0; i < 3; i++) px[o + i] = Math.round(px[o + i] * (1 - t) + colour[i] * t);
+            }
+        }
+    });
+}
+
+/* metres as shown on the HUD: steps of 10 below 1 km, of 50 above, so the picture is redrawn seldom */
+function alertMetres(dist) {
+    const d = Number(dist);
+    if (!Number.isFinite(d) || d <= 0) return null;
+    if (d < 1000) return Math.max(10, Math.round(d / 10) * 10);
+    return Math.min(9950, Math.round(d / 50) * 50);
+}
+
+/* A blue plate with a white camera; with `metres`, the camera moves up and the number sits under it. */
+function drawAlert(S, metres) {
+    const px = Buffer.alloc(S * S * 4);
+    const BLUE = [22, 92, 200], WHITE = [255, 255, 255];
+    const withText = metres !== null && metres !== undefined;
+    const c = S / 2, k = withText ? 0.66 : 1, cy = withText ? S * 0.34 : S * 0.52;
+    fillShape(px, S, BLUE, sdRoundRect(c, c, S / 2 - 1, S / 2 - 1, S * 0.17));
+    fillShape(px, S, WHITE, sdRoundRect(c, cy, S * 0.30 * k, S * 0.20 * k, S * 0.06 * k));
+    fillShape(px, S, WHITE, sdRoundRect(c - S * 0.10 * k, cy - S * 0.23 * k, S * 0.11 * k, S * 0.06 * k, S * 0.025 * k));
+    fillShape(px, S, BLUE, sdCircle(c, cy, S * 0.125 * k));
+    fillShape(px, S, WHITE, sdCircle(c, cy, S * 0.06 * k));
+    if (withText) drawDigits(px, S, String(metres), c, S * 0.76, S * 0.30, S * 0.80, WHITE);
+    return px;
+}
+
+const alertCache = new Map();
+function alertPixels(S, metres) {
+    const key = S + '@' + (metres === null || metres === undefined ? '' : metres);
+    if (!alertCache.has(key)) {
+        if (alertCache.size > 60) alertCache.clear();
+        alertCache.set(key, drawAlert(S, metres));
+    }
+    return alertCache.get(key);
 }
 
 const signCache = new Map();
@@ -528,7 +607,7 @@ function paired(p, addr, now) {
 const phone = { from: null, at: 0, seq: null, limit: null, next: null, hint: null, test: false, ver: null, packets: 0, ignored: 0, bad: 0 };
 const vmhud = {
     transport: null, connected: false, model: null, at: 0,
-    limit: null, next: null, nextDist: null, camType: null, camDist: null, hint: null,
+    limit: null, next: null, nextDist: null, camType: null, camDist: null, hint: null, alert: null,
     packets: 0, bleState: 'off', bleAdapter: null, bleError: null, bleDetail: null, usbDev: null,
 };
 
@@ -652,7 +731,14 @@ function geometry(d, woc) {
     map.y = Math.max(0, Math.min(MAP_H - s.map, map.y));
     hud.x = Math.max(0, Math.min(HUD_W - s.hud, hud.x));
     hud.y = Math.max(0, Math.min(HUD_H - s.hud, hud.y));
-    return { map, hud };
+    /* the camera alert sits beside the sign, on the side away from the edge the sign is nearest to */
+    const beside = (pos, size, total) => {
+        const gap = Math.round(size * 0.12);
+        const right = pos.x + size + gap, left = pos.x - size - gap;
+        const x = pos.x + size / 2 < total / 2 ? (right + size <= total ? right : left) : (left >= 0 ? left : right);
+        return { size, y: pos.y, x: Math.max(0, Math.min(total - size, x)) };
+    };
+    return { map, hud, mapAlert: beside(map, s.map, MAP_W), hudAlert: beside(hud, s.hud, HUD_W) };
 }
 
 /* ---------------- cluster-render Sign Overlay Layers & Overspeed Opacity Pulse ---------------- */
@@ -737,6 +823,33 @@ function applyLayers(want) {
         if (!L.visible) { cr.set(L.ref, { visible: true, opacity: flash.opacity }); L.visible = true; }
     });
     flashing(!!want.warn && (want.map.visible || (want.panel && want.panel.visible) || want.hud.visible));
+    applyAlertLayers(want);
+}
+
+/* The camera alert: its own two layers (they do not blink with the sign) */
+const alertLayers = {};
+function applyAlertLayers(want) {
+    if (!cr) return;
+    [['mapAlert', 'map'], ['hudAlert', 'hud']].forEach((pair) => {
+        const k = pair[0], target = pair[1], w = want[k];
+        let L = alertLayers[k];
+        if (!w || !w.visible) {
+            if (L && L.visible) { cr.set(L.ref, { visible: false }); L.visible = false; }
+            return;
+        }
+        if (!L || L.size !== w.size) {
+            if (L) cr.drop(L.ref);
+            const ref = cr.image({ target, klass: 'overlay', z: target === 'hud' ? 11 : 951, x: w.x, y: w.y, w: w.size, h: w.size,
+                iw: w.size, ih: w.size, visible: false, fps: 4, contend: false, guide_hold: w.guide });
+            if (!ref) { renderer.error = 'cluster-render client refused the ' + k + ' layer'; return; }
+            L = alertLayers[k] = { ref, size: w.size, x: w.x, y: w.y, key: null, visible: false, guide: w.guide };
+        }
+        const key = String(w.metres === null || w.metres === undefined ? '' : w.metres);
+        if (L.key !== key) { cr.pixels(L.ref, null, alertPixels(w.size, w.metres)); L.key = key; }
+        if (L.x !== w.x || L.y !== w.y) { cr.set(L.ref, { x: w.x, y: w.y }); L.x = w.x; L.y = w.y; }
+        if (L.guide !== w.guide) { cr.set(L.ref, { guide_hold: w.guide }); L.guide = w.guide; }
+        if (!L.visible) { cr.set(L.ref, { visible: true, opacity: 1 }); L.visible = true; }
+    });
 }
 
 /* ---------------- Optional Center Screen OCR & Diagnostic Probe ---------------- */
@@ -989,6 +1102,12 @@ function decideSigns(ctrl, nativeState, nativeFresh, isVmcGrabbing, now) {
     };
     const hud = Object.assign({ visible: showOk && wantHud && woc.hud, guide: guideHold }, g.hud);
 
+    /* camera ahead (VietMap HUD bridge): icon beside the sign on the cluster map; on the HUD with the metres */
+    const alert = d.on && vmhudFresh && vmhud.connected && vmhud.alert && !placing ? vmhud.alert : null;
+    const alertOk = renderer.installed !== false && !!alert;
+    const mapAlert = Object.assign({ visible: alertOk && wantMap && clusterSurface && !onPanel, guide: guideHold, metres: null }, g.mapAlert);
+    const hudAlert = Object.assign({ visible: alertOk && wantHud && woc.hud, guide: guideHold, metres: alert ? alertMetres(alert.dist) : null }, g.hudAlert);
+
     let why = '';
     if (!d.on) why = 'off in the app';
     else if (placing && !limit) why = '';
@@ -1005,6 +1124,7 @@ function decideSigns(ctrl, nativeState, nativeFresh, isVmcGrabbing, now) {
 
     return {
         d, woc, frontCamShown, frontTarget, placing, reading, speed: spd, over, source, limit, symbol, map, panel, hud, why,
+        alert, mapAlert, hudAlert,
     };
 }
 
@@ -1232,7 +1352,7 @@ function run() {
         const nativeFresh = !!(child && native && now - nativeAt < 3000);
         const s = decideSigns(ctrl, nativeFresh ? native : null, nativeFresh, mirror.isGrabbing(), now);
         if (CFG.camera) manageProbe(s.d.probe, now);
-        applyLayers({ symbol: s.symbol, map: s.map, panel: s.panel, hud: s.hud, warn: s.over });
+        applyLayers({ symbol: s.symbol, map: s.map, panel: s.panel, hud: s.hud, warn: s.over, mapAlert: s.mapAlert, hudAlert: s.hudAlert });
 
         const shown = [];
         if (s.map.visible || s.panel.visible) shown.push('map');
@@ -1241,7 +1361,7 @@ function run() {
 
         const statusKey = JSON.stringify([
             sentView, fps, nativeFresh ? native.shown : 0, nativeFresh ? native.layer : '', nativeFresh ? native.aux_shown : 0,
-            lastSignSummary, s.over, s.source, phone.from, phone.packets, vmhud.connected, vmhud.limit, vmhud.bleState, vmhud.bleDetail, vmhud.usbDev,
+            lastSignSummary, s.over, s.source, phone.from, phone.packets, vmhud.connected, vmhud.limit, s.hudAlert.metres, s.mapAlert.visible, s.hudAlert.visible, vmhud.bleState, vmhud.bleDetail, vmhud.usbDev,
             vmc.on, vmc.running, vmc.error, navInfo.state, navInfo.last,
         ]);
         if (statusKey !== lastStatusKey || now - lastWriteAt >= 950) {
@@ -1280,6 +1400,8 @@ function run() {
                 at: vmhud.at ? new Date(vmhud.at).toISOString() : null,
                 ago_ms: vmhud.at ? now - vmhud.at : null,
                 limit: vmhud.limit,
+                alert: vmhud.alert,
+                alert_shown: [s.mapAlert.visible ? 'map' : null, s.hudAlert.visible ? 'hud' : null].filter(Boolean),
                 next: vmhud.next,
                 next_dist: vmhud.nextDist,
                 cam_type: vmhud.camType,
@@ -1384,6 +1506,7 @@ function run() {
                 if (!st.usbDev && vmhud.transport === 'usb') {
                     vmhud.connected = false;
                     vmhud.limit = null;
+                    vmhud.alert = null;
                 }
                 try { coordinate(Date.now()); } catch (e) {}
             },
@@ -1401,6 +1524,18 @@ function run() {
                 vmhud.connected = msg.connected !== false;
                 vmhud.model = typeof msg.model === 'string' ? msg.model.slice(0, 20) : (vmhud.model || 'H1N');
                 vmhud.limit = Number.isInteger(lim) && lim >= 5 && lim <= 199 ? lim : null;
+                /* bridge v2: the tuples as VietMap sent them; the sign is the type-0 one, anything else near is a camera */
+                const split = vmHud.splitCams(msg.cams);
+                const prevAlert = vmhud.alert;
+                if (split.known && !stale && vmhud.connected) {
+                    if (split.limit) vmhud.limit = split.limit;
+                    vmhud.alert = split.alert;
+                } else {
+                    vmhud.alert = null;
+                }
+                if ((prevAlert ? prevAlert.type : null) !== (vmhud.alert ? vmhud.alert.type : null)) {
+                    log('vm-hud (usb): camera ' + (vmhud.alert ? 'type ' + vmhud.alert.type + ' in ' + vmhud.alert.dist + ' m' + (vmhud.alert.speed ? ', ' + vmhud.alert.speed + ' km/h' : '') : 'passed'));
+                }
                 const nxt = stale ? NaN : Number(msg.next);
                 vmhud.next = Number.isInteger(nxt) && nxt >= 5 && nxt <= 199 ? nxt : null;
                 vmhud.camDist = Number.isFinite(Number(msg.dist)) ? Number(msg.dist) : null;
@@ -1466,7 +1601,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-    VERSION, CFG, SIZES, BLINK, drawSign, configLine, auxLine, arLine, geometry, wocStatus,
+    VERSION, CFG, SIZES, BLINK, drawSign, drawAlert, alertMetres, configLine, auxLine, arLine, geometry, wocStatus,
     parsePacket, allowedSender, paired, pairCode, setCode, pair, phone, vmhud, decideSigns, camState,
     ensureRules, removeRules, ourRules, listenUdp, readControlState, run, deactivate,
     _reset: () => {
@@ -1475,7 +1610,7 @@ module.exports = {
         liveControl = null; liveControlDir = null; labelSeq = null;
         Object.assign(vmhud, {
             transport: null, connected: false, model: null, at: 0,
-            limit: null, next: null, nextDist: null, camType: null, camDist: null, hint: null,
+            limit: null, next: null, nextDist: null, camType: null, camDist: null, hint: null, alert: null,
             packets: 0, bleState: 'off', bleAdapter: null, bleError: null, bleDetail: null, usbDev: null,
         });
     },

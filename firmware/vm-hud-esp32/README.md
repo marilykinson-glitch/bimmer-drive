@@ -41,8 +41,12 @@ arduino-cli compile -b esp32:esp32:esp32c6:CDCOnBoot=cdc --output-dir out-c6 /tm
 
 ## Định dạng dữ liệu qua USB Serial (115200 baud)
 ```json
-{"t":"vmhud","v":1,"limit":60,"next":50,"dist":200,"camType":1,"connected":true,"model":"H1N"}
+{"t":"vmhud","v":2,"limit":50,"next":0,"dist":100,"camType":0,"connected":true,"model":"H1N","camAgeMs":0,"camFrames":24,"rxDrop":0,"rxPartial":0,"cams":[[1,34464,0],[0,100,50]]}
 ```
+`cams` là nguyên văn các bộ `[loại, khoảng cách (m), tốc độ]` VietMap gửi trong gói camera (lệnh `01`). Từ `bimmer-drive` 1.1.4, xe tự tách từ đây:
+* **Biển tốc độ** = bộ có loại `0` (ví dụ `[0,100,50]` = biển 50).
+* **Camera phía trước** = bộ loại khác `0` có khoảng cách thật -> hiện biểu tượng camera cạnh biển tốc độ trên đồng hồ, và trên HUD kính lái kèm số mét còn lại. Khoảng cách `34464` (= 100000 cắt còn 16 bit) nghĩa là "không có gì phía trước".
+* Mã loại nào ứng với camera tốc độ / đèn đỏ / khu dân cư / cấm vượt thì **chưa đối chiếu được**: hiện mọi cảnh báo đều vẽ chung biểu tượng camera, loại được ghi vào nhật ký (`vm-hud (usb): camera type N in D m`).
 `bimmer-drive` tự động đọc dòng JSON này từ `/dev/ttyACM*` / `/dev/ttyUSB*`, cập nhật biển P.127 trên đồng hồ + kính lái HUD ngay lập tức mà không cần nhập mã ghép đôi 6 số.
 
 ## Nhật ký byte thô trên xe

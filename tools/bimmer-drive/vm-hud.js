@@ -341,6 +341,36 @@ function createRawFilter(opts) {
     };
 }
 
+/**
+ * The bridge's "cams": [[type, distance m, speed km/h], ...], the tuples of VietMap's camera frame
+ * (cmd 0x01) as sent. Seen with VietMap Live 3.4.5: [[1, 34464, 0], [0, 100, 50]] on a 50 road with no
+ * camera ahead - 34464 is 100000 cut to 16 bits, the app's "nothing ahead".
+ *   - limit: the speed of the type-0 tuple (nearest one when several);
+ *   - alert: the nearest tuple of any other type with a real distance (a camera ahead).
+ * Which type number means which camera is not known yet: every alert is shown as "camera".
+ */
+const CAM_NONE_DIST = 100000 & 0xFFFF;
+function splitCams(cams) {
+    const out = { known: false, limit: null, alert: null };
+    if (!Array.isArray(cams)) return out;
+    out.known = true;
+    let limDist = Infinity, alDist = Infinity;
+    for (let i = 0; i < cams.length && i < 8; i++) {
+        const c = cams[i];
+        if (!Array.isArray(c) || c.length < 3) continue;
+        const type = Number(c[0]), dist = Number(c[1]), speed = Number(c[2]);
+        if (!Number.isInteger(type) || !Number.isInteger(dist) || !Number.isInteger(speed)) continue;
+        if (dist < 0 || dist === CAM_NONE_DIST || dist >= 30000) continue;
+        if (type === 0) {
+            if (speed >= 5 && speed <= 199 && dist < limDist) { limDist = dist; out.limit = speed; }
+        } else if (dist > 0 && dist < alDist) {
+            alDist = dist;
+            out.alert = { type, dist, speed: speed >= 5 && speed <= 199 ? speed : null };
+        }
+    }
+    return out;
+}
+
 function createSerialBridge(opts) {
     const o = opts || {};
     const devDir = o.devDir || '/dev';
@@ -458,6 +488,8 @@ module.exports = {
     WRITE_UUID,
     ADV_NAME,
     createRawFilter,
+    splitCams,
+    CAM_NONE_DIST,
     HUD_INFO_STR,
     USB_BRIDGE_VIDS,
     camTypeHint,

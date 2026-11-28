@@ -459,7 +459,7 @@ function signReport(st, s) {
     const usbTag = (!vh.connected && vh.usbDev) ? (' · USB ' + String(vh.usbDev).split('/').pop()) : '';
     if (vh.connected) {
         const via = vh.transport === 'usb' ? 'USB' : 'BLE';
-        lines.push({ text: 'VietMap HUD (' + via + '): đã nối ' + (vh.model || 'H1N') + (vh.limit ? ' · biển ' + vh.limit : ''), kind: 'go' });
+        lines.push({ text: 'VietMap HUD (' + via + '): đã nối ' + (vh.model || 'H1N') + (vh.limit ? ' · biển ' + vh.limit : '') + (vh.alert && vh.alert.dist ? ' · camera ' + vh.alert.dist + ' m' : ''), kind: 'go' });
     } else if (vh.bleState === 'advertising') {
         lines.push({ text: 'VietMap HUD (BLE): đang phát vietmap_V3 trên ' + (vh.bleAdapter || 'hci0') + usbTag, kind: 'go' });
     } else if (vh.bleState === 'no_bluez' || vh.bleState === 'no_adapter') {
