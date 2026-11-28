@@ -2,6 +2,7 @@
 #include "decoder.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 extern "C" {
@@ -11,9 +12,14 @@ extern "C" {
 #include <libavutil/pixfmt.h>
 }
 
+#include "decoder_msdk.h"
 #include "log.h"
 
 namespace sidecam {
+
+struct H264Decoder::Hw {
+    woc::Decoder dec;
+};
 
 struct H264Decoder::State {
     AVCodecContext *ctx = nullptr;
@@ -40,17 +46,107 @@ void quiet_log(void *, int level, const char *fmt, va_list ap)
 }  // namespace
 
 H264Decoder::H264Decoder() {}
-H264Decoder::~H264Decoder() { close(); }
+H264Decoder::~H264Decoder()
+{
+    close();
+    if (hw_) {
+        hw_->dec.shutdown();
+        delete hw_;
+        hw_ = nullptr;
+    }
+}
+
+namespace {
+
+/* The first user-data-unregistered SEI of an access unit (UUID and payload,
+ * at most 40 bytes) as hex, like libavcodec's side data; empty without one. */
+std::string au_sei_hex(const uint8_t *d, size_t n, bool *idr)
+{
+    std::string out;
+    *idr = false;
+    size_t i = 0;
+    while (i + 3 < n) {
+        if (!(d[i] == 0 && d[i + 1] == 0 && d[i + 2] == 1)) { i++; continue; }
+        size_t s = i + 3;
+        size_t e = s;
+        while (e + 2 < n && !(d[e] == 0 && d[e + 1] == 0 && (d[e + 2] == 1 || d[e + 2] == 0))) e++;
+        if (e + 2 >= n) e = n;
+        if (s < e) {
+            const int type = d[s] & 31;
+            if (type == 5) *idr = true;
+            if (type == 6 && out.empty()) {
+                std::vector<uint8_t> rb;   /* emulation prevention removed */
+                rb.reserve(e - s);
+                int zeros = 0;
+                for (size_t k = s + 1; k < e; k++) {
+                    if (zeros >= 2 && d[k] == 3) { zeros = 0; continue; }
+                    zeros = d[k] == 0 ? zeros + 1 : 0;
+                    rb.push_back(d[k]);
+                }
+                size_t p = 0;
+                while (p + 2 <= rb.size() && rb[p] != 0x80) {
+                    unsigned pt = 0, ps = 0;
+                    while (p < rb.size() && rb[p] == 0xff) { pt += 255; p++; }
+                    if (p >= rb.size()) break;
+                    pt += rb[p++];
+                    while (p < rb.size() && rb[p] == 0xff) { ps += 255; p++; }
+                    if (p >= rb.size()) break;
+                    ps += rb[p++];
+                    if (p + ps > rb.size()) break;
+                    if (pt == 5) {
+                        static const char hex[] = "0123456789abcdef";
+                        const size_t m = ps < 40 ? ps : 40;
+                        for (size_t k = 0; k < m; k++) {
+                            out.push_back(hex[rb[p + k] >> 4]);
+                            out.push_back(hex[rb[p + k] & 15]);
+                        }
+                        break;
+                    }
+                    p += ps;
+                }
+            }
+        }
+        i = e;
+    }
+    return out;
+}
+
+}  // namespace
 
 std::string H264Decoder::version()
 {
-    char b[64];
+    char b[96];
     const unsigned v = avcodec_version();
-    std::snprintf(b, sizeof b, "libavcodec %u.%u.%u", v >> 16, (v >> 8) & 255, v & 255);
+    std::snprintf(b, sizeof b, "Intel MSDK (hardware) + libavcodec %u.%u.%u (fallback)", v >> 16, (v >> 8) & 255, v & 255);
     return b;
 }
 
 bool H264Decoder::open(std::string *err)
+{
+    close();
+    const char *want = std::getenv("SIDECAM_DECODER");
+    if (!(want && std::strcmp(want, "sw") == 0)) {
+        if (hw_) {
+            hw_->dec.shutdown();
+            delete hw_;
+        }
+        hw_ = new Hw();
+        std::string e;
+        if (hw_->dec.init("/dev/dri/renderD128", 0, 0, 0, false, &e)) {
+            hw_active_ = true;
+            hw_fails_ = 0;
+            log_info("decoder: hardware (Intel MSDK)");
+            return true;
+        }
+        log_warn("decoder: hardware unavailable (%s), using libavcodec", e.c_str());
+        delete hw_;
+        hw_ = nullptr;
+    }
+    hw_active_ = false;
+    return open_sw(err);
+}
+
+bool H264Decoder::open_sw(std::string *err)
 {
     close();
     av_log_set_callback(quiet_log);
@@ -90,6 +186,58 @@ bool H264Decoder::open(std::string *err)
     return true;
 }
 
+int H264Decoder::decode_hw(const uint8_t *data, size_t len, const Sink &sink)
+{
+    bool idr = false;
+    /* Idle, still two pictures in a row out of every 15 access units (both
+     * halves of a paired stream, ~4 a second): the app shows a view only
+     * while the helper's pictures keep coming (picture_age_ms, pair). */
+    const bool want_picture = !idle_ || (idle_n_++ % 15) < 2;
+    std::string sei;
+    if (want_picture)
+        sei = au_sei_hex(data, len, &idr);
+    if (want_picture)
+        hw_->dec.forget_last();   /* every picture with its planes, even one equal to the last */
+    int pictures = 0;
+    std::string e;
+    const bool ok = hw_->dec.feed(data, len, [&](const woc::VideoFrame &f) {
+        if (!f.atlas || f.w < 32 || f.h < 32 || (f.w & 1) || (f.h & 1))
+            return;
+        const uint8_t *a = f.atlas->data();
+        DecodedFrame d;
+        d.planes.y = a;
+        d.planes.u = a + (size_t)f.w * f.h;
+        d.planes.v = a + (size_t)f.w * f.h + f.w / 2;
+        d.planes.y_stride = (int)f.w;
+        d.planes.c_stride = (int)f.w;
+        d.planes.w = (int)f.w;
+        d.planes.h = (int)f.h;
+        d.planes.full_range = false;   /* the camera unit's stream: studio levels (status full_range 0 with libavcodec) */
+        d.key = idr;
+        d.corrupt = f.corrupted != 0;
+        d.sei = sei;
+        sink(d);
+        pictures++;
+    }, &e, true, want_picture);
+    if (!ok) {
+        errors_++;
+        if (++hw_fails_ >= kFailLimit) {
+            log_warn("decoder: hardware failed %d access units in a row (%s), falling back to libavcodec", hw_fails_, e.c_str());
+            restarts_++;
+            hw_->dec.shutdown();
+            delete hw_;
+            hw_ = nullptr;
+            hw_active_ = false;
+            std::string err;
+            if (!open_sw(&err))
+                log_error("decoder: %s", err.c_str());
+        }
+        return pictures ? pictures : -1;
+    }
+    hw_fails_ = 0;
+    return pictures;
+}
+
 void H264Decoder::set_idle(bool idle)
 {
     if (idle_ == idle)
@@ -115,6 +263,13 @@ void H264Decoder::close()
 }
 
 int H264Decoder::decode(const uint8_t *data, size_t len, const Sink &sink)
+{
+    if (hw_active_ && hw_ && len)
+        return decode_hw(data, len, sink);
+    return decode_sw(data, len, sink);
+}
+
+int H264Decoder::decode_sw(const uint8_t *data, size_t len, const Sink &sink)
 {
     if (!s_ || !len)
         return -1;
@@ -168,7 +323,7 @@ int H264Decoder::decode(const uint8_t *data, size_t len, const Sink &sink)
             std::string err;
             restarts_++;
             log_warn("decoder: %d access units failed in a row, starting again", fails_);
-            if (!open(&err))
+            if (!open_sw(&err))
                 log_error("decoder: %s", err.c_str());
         }
         return pictures ? pictures : -1;

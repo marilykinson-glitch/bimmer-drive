@@ -57,6 +57,7 @@ struct Aux {
 
 struct Stats {
     uint64_t packets = 0, bytes = 0;       /* received */
+    std::string decoder;                   /* msdk | libavcodec */
     uint64_t lost = 0;                     /* RTP packets missing */
     uint64_t dropped = 0;                  /* packets the queue dropped (decode too slow) */
     uint64_t access_units = 0;

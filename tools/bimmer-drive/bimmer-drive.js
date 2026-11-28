@@ -32,7 +32,7 @@ const wocMirror = require('./woc-mirror');
 const vmHud = require('./vm-hud');
 const dbusBluezHud = require('./dbus-bluez-hud');
 
-const VERSION = '1.1.1';
+const VERSION = '1.1.2';
 const env = (k, d) => (process.env[k] !== undefined && process.env[k] !== '' ? process.env[k] : d);
 
 const CFG = {

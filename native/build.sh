@@ -37,12 +37,20 @@ for l in libc libpthread libm libdl librt ld; do
 done
 gcc -shared -nostdlib -fPIC -Wl,-soname,libias-media_transport-avb_ufipc_bridge.so.1 \
     -o $B/stubs/libias-media_transport-avb_ufipc_bridge.so.1 $TC/ias_avb_stub.c
+# the unit's Intel Media SDK and VA-API (hardware H.264), from their export lists
+MS=third_party/idrive-apps/msdk
+for p in "libmfx:libmfxhw64.so" "libva:libva.so.1" "libva-drm:libva-drm.so.1"; do
+    n=${p%%:*}; so=${p#*:}
+    python3 $TC/mkstub.py $MS/abi/$n.symbols > $B/stubs/$n.c
+    gcc -shared -nostdlib -fPIC -Wl,-soname,$so -o $B/stubs/$so $B/stubs/$n.c
+done
 
 # 3. compile
 TP=third_party/idrive-apps
-INC="-Isrc -I$TP/waze-on-cluster/src -I$TP/cluster-render/include -I$TP/cluster-render/src -I$B/ffmpeg/include"
+INC="-Isrc -I$TP/msdk/src -I$TP/msdk/kit -I$TP/msdk/abi/include -I$TP/waze-on-cluster/src -I$TP/cluster-render/include -I$TP/cluster-render/src -I$B/ffmpeg/include"
 CXXFLAGS="-std=c++14 $CFLAGS_COMMON -Wall -Wextra -pthread -DSIDECAM_VERSION=\"$VERSION\" -DAVB_RECEIVER_NAME=\"bimmerdrive.receiver\""
 SRCS="src/main.cpp src/pipeline.cpp src/decoder.cpp src/resample.cpp src/overlay.cpp
+      $TP/msdk/src/decoder_msdk.cpp $TP/msdk/src/nal_reader.cpp $TP/msdk/kit/yuv_atlas.cpp
       $TP/waze-on-cluster/src/avb_source.cpp $TP/waze-on-cluster/src/rtp_h264.cpp
       $TP/cluster-render/client/client.cpp $TP/cluster-render/client/protocol.cpp $TP/cluster-render/src/log.cpp"
 OBJS=""
@@ -64,13 +72,16 @@ g++ -nostdlib -nostartfiles -pie -o $B/mgu-sidecam \
     $OBJS $B/obj/compat.o \
     $B/ffmpeg/lib/libavcodec.a $B/ffmpeg/lib/libavutil.a \
     "$GCCDIR/libstdc++.a" "$GCCDIR/libgcc.a" "$GCCDIR/libgcc_eh.a" \
-    -L$B/stubs -l:libias-media_transport-avb_ufipc_bridge.so.1 \
+    -L$B/stubs -l:libmfxhw64.so -l:libva-drm.so.1 -l:libva.so.1 -l:libias-media_transport-avb_ufipc_bridge.so.1 \
     -l:libpthread.so.0 -l:libm.so.6 -l:libdl.so.2 -l:librt.so.1 -l:libc.so.6 -l:ld-linux-x86-64.so.2 \
     "$GCCDIR/libgcc.a" "$GCCDIR/crtendS.o" "$(gcc -print-file-name=crtn.o)"
 
 # 5. every import must exist on the unit
 python3 $TC/check_abi.py $B/mgu-sidecam $TC/abilists \
-    libias-media_transport-avb_ufipc_bridge.so.1:ias_avbbridge_create_receiver,ias_avbbridge_register_H264_cb,ias_avbbridge_destroy_receiver
+    libias-media_transport-avb_ufipc_bridge.so.1:ias_avbbridge_create_receiver,ias_avbbridge_register_H264_cb,ias_avbbridge_destroy_receiver \
+    libmfxhw64.so:$(sed -n 's/^\([A-Za-z_0-9]*\) FUNC.*/\1/p' $MS/abi/libmfx.symbols | paste -sd, -) \
+    libva.so.1:$(sed -n 's/^\([A-Za-z_0-9]*\) FUNC.*/\1/p' $MS/abi/libva.symbols | paste -sd, -) \
+    libva-drm.so.1:$(sed -n 's/^\([A-Za-z_0-9]*\) FUNC.*/\1/p' $MS/abi/libva-drm.symbols | paste -sd, -)
 ls -l $B/mgu-sidecam
 
 if [ "${1:-}" = "test" ]; then

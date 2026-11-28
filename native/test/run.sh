@@ -9,6 +9,13 @@ B=build/test
 mkdir -p $B/lib
 gcc -shared -fPIC -O2 -Wl,-soname,libias-media_transport-avb_ufipc_bridge.so.1 \
     -o $B/lib/libias-media_transport-avb_ufipc_bridge.so.1 test/fake_ias_avb.c -lpthread
+# no Intel GPU here: MSDK and VA-API that refuse to start, so the binary takes its libavcodec fallback
+MS=third_party/idrive-apps/msdk/abi
+for p in "libmfx:libmfxhw64.so" "libva:libva.so.1" "libva-drm:libva-drm.so.1"; do
+    n=${p%%:*}; so=${p#*:}
+    sed -n 's/^\([A-Za-z_0-9]*\) FUNC.*/long \1(void) { return -3; }/p' $MS/$n.symbols | sed 's/^long vaGetDisplayDRM(void) { return -3; }/void *vaGetDisplayDRM(void) { return 0; }/' > $B/lib/$n.c
+    gcc -shared -fPIC -O2 -Wl,-soname,$so -o $B/lib/$so $B/lib/$n.c
+done
 g++ -std=c++14 -O2 -Wall -Wextra -Isrc -o $B/resample_test test/resample_test.cpp src/resample.cpp
 $B/resample_test
 g++ -std=c++14 -O2 -Wall -Wextra -fsanitize=address,undefined -Isrc -o $B/overlay_test test/overlay_test.cpp src/overlay.cpp

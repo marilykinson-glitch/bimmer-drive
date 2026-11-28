@@ -135,6 +135,7 @@ void emit_status(App &a)
     str("ev", "status");
     str("version", SIDECAM_VERSION);
     str("avb", s.avb);
+    str("decoder", s.decoder);
     n("packets", (long long)s.packets);
     n("bytes", (long long)s.bytes);
     n("lost", (long long)s.lost);

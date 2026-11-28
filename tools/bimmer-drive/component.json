@@ -1,7 +1,7 @@
 {
   "id": "bimmer-drive",
   "kind": "tool",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "title": "Trợ thủ Camera & VietMap",
   "description": "Dịch vụ gốc hợp nhất cho Camera xi nhan, Camera trước AR dẫn đường, Biển báo tốc độ VietMap HUD (BLE/USB) / VietMap ĐT / KAFAS / Bản đồ BMW (kèm biển --- chuẩn hãng) và Đưa màn giữa lên đồng hồ; đồng thời kích hoạt MGU Studio theo yêu cầu (0 MB RAM khi không mở).",
   "license": "GPL-3.0-or-later",

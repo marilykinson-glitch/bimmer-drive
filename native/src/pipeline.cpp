@@ -199,6 +199,7 @@ void Pipeline::loop()
         stats_.access_units++;
         stats_.decode_errors = dec_.errors();
         stats_.restarts = dec_.restarts();
+        stats_.decoder = dec_.backend();
         if (r > 0)
             stats_.decode_us = (int)(t1 - t0);
     };

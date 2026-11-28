@@ -336,7 +336,7 @@ async function runIntegration() {
     // Pre-populate leftover stale file in compatDir to verify ensureCompatSymlink replaces leftover directory cleanly
     fs.writeFileSync(path.join(compatDir, 'status.json'), '{}');
 
-    fs.writeFileSync(path.join(appRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'bimmer_drive', version: '1.1.1' }));
+    fs.writeFileSync(path.join(appRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'bimmer_drive', version: '1.1.2' }));
     fs.writeFileSync(path.join(anhRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'anh_dai_dien', version: '1.0.3' }));
     fs.writeFileSync(path.join(wocRun, 'status.json'), JSON.stringify({ state: 'starting', reason: 'under an alert on the cluster', target: 'map', cluster: 1, hud: 1, hud_state: 'showing', hide_bmw_guidance: 1 }));
 
@@ -499,13 +499,13 @@ setInterval(() => {
     await sleep(400);
 
     const st0 = JSON.parse(fs.readFileSync(path.join(runDir, 'status.json'), 'utf8'));
-    ok(st0.version === '1.1.1' && st0.shown.indexOf('map') >= 0, 'v1.1.1 coordinator renders map layer while waze-on-cluster is suspended');
+    ok(st0.version === '1.1.2' && st0.shown.indexOf('map') >= 0, 'v1.1.2 coordinator renders map layer while waze-on-cluster is suspended');
     ok(selectedAdapter === '/org/bluez/hci1' && seenAliasWrites.length === 0, 'dbus-bluez-hud prefers secondary hci1 over hci0 and never renames Adapter1.Alias');
     const fullHudReply = Buffer.concat(seenNotifyChunks);
     ok(fullHudReply.toString('utf8').indexOf('MODEL:H1N,HW:1.0,FW:1.0,PROTOCOL:2.2.2') >= 0, 'dbus-bluez-hud emits chunked PropertiesChanged HUDInfo reply over D-Bus');
     ok(st0.vmhud && st0.vmhud.connected === true && st0.vmhud.bleState === 'advertising' && st0.vmhud.bleDetail === 'hci1 ok' && st0.vmhud.limit === 80 && st0.limit === 80 && st0.source === 'vmhud',
         'Live BlueZ GATT VietMap HUD connection updates cluster sign to 80 km/h with source=vmhud');
-    ok(fs.lstatSync(compatDir).isSymbolicLink() && JSON.parse(fs.readFileSync(path.join(compatDir, 'status.json'), 'utf8')).version === '1.1.1', 'leftover /run/vietmap-signs directory replaced cleanly with symlink');
+    ok(fs.lstatSync(compatDir).isSymbolicLink() && JSON.parse(fs.readFileSync(path.join(compatDir, 'status.json'), 'utf8')).version === '1.1.2', 'leftover /run/vietmap-signs directory replaced cleanly with symlink');
 
     // Test ESP32 USB Serial Bridge: must IGNORE BMW internal ttyACM0 (no allowlisted idVendor) and ACCEPT ESP32 VID 303a
     const mockSysTty = path.join(tmp, 'sys-tty');
