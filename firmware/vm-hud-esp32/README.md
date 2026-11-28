@@ -8,7 +8,10 @@ Firmware gọn nhẹ biến một mạch **ESP32-C3** (hoặc ESP32 thường / 
 
 ## Cách nạp firmware bằng Arduino IDE
 1. Cài **Arduino IDE** + Board Manager **`esp32` by Espressif Systems** (bản 2.x hoặc 3.x).
-2. Chọn board tương ứng (ví dụ `ESP32C3 Dev Module` — nhớ bật **USB CDC On Boot: Enabled** nếu dùng mạch SuperMini ESP32-C3 để Serial USB xuất ra `/dev/ttyACM0`).
+2. Chọn board:
+   * **ESP32-C6 SuperMini:** `ESP32C6 Dev Module`, bật **USB CDC On Boot: Enabled** (cần Arduino-ESP32 **3.x**, khuyên 3.1 trở lên).
+   * ESP32-C3 SuperMini: `ESP32C3 Dev Module`, cũng bật **USB CDC On Boot: Enabled**.
+   * Nếu không nạp được: giữ nút **BOOT**, bấm **RST**, nhả BOOT rồi bấm Upload.
 3. Mở file [`vm_hud_esp32.ino`](./vm_hud_esp32.ino) -> bấm **Upload**.
 4. Cắm mạch vào cổng USB trên xe (hoặc test thử trên máy tính), mở **VietMap Live -> Kết nối HUD**, chọn **`HUD(BLE)`**.
 
@@ -17,3 +20,8 @@ Firmware gọn nhẹ biến một mạch **ESP32-C3** (hoặc ESP32 thường / 
 {"t":"vmhud","v":1,"limit":60,"next":50,"dist":200,"camType":1,"connected":true,"model":"H1N"}
 ```
 `bimmer-drive` tự động đọc dòng JSON này từ `/dev/ttyACM*` / `/dev/ttyUSB*`, cập nhật biển P.127 trên đồng hồ + kính lái HUD ngay lập tức mà không cần nhập mã ghép đôi 6 số.
+
+## Thử với VietMap Live trước khi ra xe (chế độ `RAW_LOG`)
+Firmware mặc định bật `RAW_LOG 1`: ngoài dòng `vmhud`, còn in mọi byte VietMap gửi (`"dir":"rx"`) và ESP32 trả lời (`"dir":"tx"`). `bimmer-drive` tự bỏ qua các dòng `"t":"raw"`.
+
+Trên Mac: cắm mạch, mở Serial Monitor 115200 (hoặc `screen /dev/cu.usbmodem* 115200`), rồi mở **VietMap Live -> Kết nối HUD -> `HUD(BLE)`**, chạy thử một đoạn đường và lưu toàn bộ log lại.
