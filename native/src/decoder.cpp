@@ -132,10 +132,13 @@ bool H264Decoder::open(std::string *err)
         }
         hw_ = new Hw();
         std::string e;
-        if (hw_->dec.init("/dev/dri/renderD128", 0, 0, 0, false, &e)) {
+        /* GPU copy (MSDK's CM copy) of each picture to system memory; SIDECAM_GPU_COPY=0: on the CPU */
+        const char *gc = std::getenv("SIDECAM_GPU_COPY");
+        const bool gpu_copy = !(gc && std::strcmp(gc, "0") == 0);
+        if (hw_->dec.init("/dev/dri/renderD128", 0, 0, 0, gpu_copy, &e)) {
             hw_active_ = true;
             hw_fails_ = 0;
-            log_info("decoder: hardware (Intel MSDK)");
+            log_info("decoder: hardware (Intel MSDK)%s", gpu_copy ? ", GPU copy" : "");
             return true;
         }
         log_warn("decoder: hardware unavailable (%s), using libavcodec", e.c_str());
