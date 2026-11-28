@@ -3,7 +3,10 @@
  * vm-hud.js - VietMap Live Hardware HUD (`HUD(BLE)` / H1N / H2AS / H1AS) Protocol & USB Serial Bridge.
  *
  * Extracted from `vn.vietmap.live` (`P7/a.java`, `R7/d.java`, `V7/c.java`, `Da/c.java`):
- *   - Advertised BLE LocalName: `HUD(BLE)`
+ *   - Advertised BLE LocalName: `vietmap-HUD_V3(BLE)`. Measured with VietMap Live 3.4.5 (Android):
+ *       the app lists a device only when its name has "vietmap" in it, and connects over BLE GATT
+ *       (FFF0/FFF1/FFF2) only for `...HUD_V3(BLE)`; any other listed name is connected over classic
+ *       Bluetooth SPP, and names such as `HUD(BLE)` are not listed at all.
  *   - GATT Service: `0000fff0-0000-1000-8000-00805f9b34fb`
  *   - Notify Characteristic (HUD -> Phone): `0000fff1-0000-1000-8000-00805f9b34fb`
  *   - Write Characteristic  (Phone -> HUD): `0000fff2-0000-1000-8000-00805f9b34fb`
@@ -20,7 +23,7 @@ const cp = require('child_process');
 const SERVICE_UUID = '0000fff0-0000-1000-8000-00805f9b34fb';
 const NOTIFY_UUID = '0000fff1-0000-1000-8000-00805f9b34fb';
 const WRITE_UUID = '0000fff2-0000-1000-8000-00805f9b34fb';
-const ADV_NAME = 'HUD(BLE)';
+const ADV_NAME = 'vietmap-HUD_V3(BLE)';
 const HUD_INFO_STR = 'MODEL:H1N,HW:1.0,FW:1.0,PROTOCOL:2.2.2,OBDV:1_1,SID:0';
 
 const USB_BRIDGE_VIDS = {
@@ -307,6 +310,37 @@ function createProtocol(opts) {
     return { feed, onSubscribe, reset, sendHudInfo };
 }
 
+/**
+ * Keeps the bridge's raw byte log ({"t":"raw",...} lines) small enough to leave on in the car:
+ *   - events (connect / disconnect / rename) are always kept;
+ *   - of what the phone sends ("rx"), only whole C3 frames, never the picture frames (cmd 0x40)
+ *     nor their continuation chunks;
+ *   - a frame whose command and body equal the last one kept for that command is dropped, but
+ *     written again after `repeatMs` so a drive log still shows it was being sent;
+ *   - what the bridge answers ("tx") is dropped (it is always the same few frames).
+ * Returns a function (msg, now) -> line to append, or null.
+ */
+function createRawFilter(opts) {
+    const o = opts || {};
+    const repeatMs = Number(o.repeatMs) || 30000;
+    const last = {};
+    return function rawLine(msg, now) {
+        if (!msg || msg.t !== 'raw') return null;
+        const t = new Date(now).toISOString();
+        if (msg.evt) return t + ' evt ' + String(msg.evt).slice(0, 24) + (msg.name ? ' ' + String(msg.name).slice(0, 24) : '');
+        if (msg.dir !== 'rx' || typeof msg.hex !== 'string') return null;
+        const hex = msg.hex.toLowerCase();
+        if (hex.length < 42 || hex.length > 600 || hex.indexOf('a55a37c3') !== 0 || !/^[0-9a-f]+$/.test(hex)) return null;
+        const cmd = hex.slice(24, 26);
+        if (cmd === '40') return null;
+        const body = hex.slice(26, hex.length - 16);
+        const prev = last[cmd];
+        if (prev && prev.body === body && (now - prev.at) < repeatMs) return null;
+        last[cmd] = { body, at: now };
+        return t + ' rx ' + cmd + ' ' + body;
+    };
+}
+
 function createSerialBridge(opts) {
     const o = opts || {};
     const devDir = o.devDir || '/dev';
@@ -317,6 +351,7 @@ function createSerialBridge(opts) {
     const onJson = typeof o.onJson === 'function' ? o.onJson : () => {};
     const onState = typeof o.onState === 'function' ? o.onState : () => {};
     const onFrame = typeof o.onFrame === 'function' ? o.onFrame : () => {};
+    const onRaw = typeof o.onRaw === 'function' ? o.onRaw : null;
 
     const proto = createProtocol({ onUpdate: onFrame, log });
     let timer = null;
@@ -388,6 +423,8 @@ function createSerialBridge(opts) {
                 try { msg = JSON.parse(line); } catch (e) { continue; }
                 if (msg && (msg.t === 'vmhud' || msg.t === 'vms')) {
                     onJson(msg, devPath);
+                } else if (msg && msg.t === 'raw' && onRaw) {
+                    try { onRaw(msg, devPath); } catch (e) {}
                 }
             }
         });
@@ -420,6 +457,7 @@ module.exports = {
     NOTIFY_UUID,
     WRITE_UUID,
     ADV_NAME,
+    createRawFilter,
     HUD_INFO_STR,
     USB_BRIDGE_VIDS,
     camTypeHint,

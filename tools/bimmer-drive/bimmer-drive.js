@@ -32,7 +32,7 @@ const wocMirror = require('./woc-mirror');
 const vmHud = require('./vm-hud');
 const dbusBluezHud = require('./dbus-bluez-hud');
 
-const VERSION = '1.1.2';
+const VERSION = '1.1.3';
 const env = (k, d) => (process.env[k] !== undefined && process.env[k] !== '' ? process.env[k] : d);
 
 const CFG = {
@@ -62,6 +62,7 @@ const CFG = {
     vmhudStaleMs: Number(env('BD_VMHUD_STALE_MS', 15000)),
     vmhudSerial: env('BD_VMHUD_SERIAL', ''),
     vmhudDevDir: env('BD_VMHUD_DEV_DIR', '/dev'),
+    vmhudRawLog: env('BD_VMHUD_RAW_LOG', '/var/opt/bimmer-drive/vmhud-raw.log'),
     vmhudSysTty: env('BD_VMHUD_SYS_TTY', '/sys/class/tty'),
     vmhudSysBt: env('BD_VMHUD_SYS_BT', '/sys/class/bluetooth'),
     wocStaleMs: Number(env('BD_WOC_STALE_MS', 30000)),
@@ -86,6 +87,7 @@ const ANH_APP = /^anh_dai_dien\d*$/;
 const VIEWS = ['none', 'left', 'right', 'all', 'front'];
 const NFT_COMMENT = 'bimmer-drive';
 const RESTART_MS = 2000, RESTART_MAX_MS = 60000, YOUNG_MS = 10000, LOG_MAX = 512 * 1024;
+const VMHUD_SIGN_STALE_MS = 8000;
 const STATUS_FILE = () => path.join(CFG.run, 'status.json');
 const APP_RUN = () => path.join(CFG.run, 'app');
 const CTL_SOCK = () => path.join(APP_RUN(), 'ctl.sock');
@@ -109,6 +111,14 @@ function log(m) {
     process.stdout.write(line + '\n');
     try { if (fs.statSync(CFG.log).size > LOG_MAX) fs.renameSync(CFG.log, CFG.log + '.1'); } catch (e) {}
     try { fs.appendFileSync(CFG.log, line + '\n'); } catch (e) {}
+}
+
+/* What VietMap Live sends the USB bridge, filtered (vm-hud.js createRawFilter): one small file + .1 */
+const VMHUD_RAW_MAX = 256 * 1024;
+function appendVmHudRaw(line) {
+    if (!CFG.vmhudRawLog || !line) return;
+    try { if (fs.statSync(CFG.vmhudRawLog).size > VMHUD_RAW_MAX) fs.renameSync(CFG.vmhudRawLog, CFG.vmhudRawLog + '.1'); } catch (e) {}
+    try { fs.appendFileSync(CFG.vmhudRawLog, line + '\n'); } catch (e) {}
 }
 
 function readText(p) { try { return fs.readFileSync(p, 'utf8'); } catch (e) { return null; } }
@@ -1349,6 +1359,7 @@ function run() {
 
     let bluezHud = null;
     let serialBridge = null;
+    const vmHudRawFilter = vmHud.createRawFilter();
     if (CFG.vmHud) {
         bluezHud = dbusBluezHud.createBluezHud({
             socketPath: CFG.dbusSock,
@@ -1377,15 +1388,20 @@ function run() {
                 try { coordinate(Date.now()); } catch (e) {}
             },
             onFrame: (ev) => onVmHudEvent('usb', ev),
+            onRaw: (msg) => appendVmHudRaw(vmHudRawFilter(msg, Date.now())),
             onJson: (msg) => {
                 const now = Date.now();
-                const lim = Number(msg.limit);
+                /* camAgeMs (bridge firmware): ms since VietMap last sent a sign; -1 = never. A sign the
+                   phone stopped sending (app closed, phone out of range) must not stay on the cluster. */
+                const age = Number(msg.camAgeMs);
+                const stale = msg.camAgeMs !== undefined && (!Number.isFinite(age) || age < 0 || age > VMHUD_SIGN_STALE_MS);
+                const lim = stale ? NaN : Number(msg.limit);
                 vmhud.at = now;
                 vmhud.transport = 'usb';
                 vmhud.connected = msg.connected !== false;
                 vmhud.model = typeof msg.model === 'string' ? msg.model.slice(0, 20) : (vmhud.model || 'H1N');
                 vmhud.limit = Number.isInteger(lim) && lim >= 5 && lim <= 199 ? lim : null;
-                const nxt = Number(msg.next);
+                const nxt = stale ? NaN : Number(msg.next);
                 vmhud.next = Number.isInteger(nxt) && nxt >= 5 && nxt <= 199 ? nxt : null;
                 vmhud.camDist = Number.isFinite(Number(msg.dist)) ? Number(msg.dist) : null;
                 vmhud.camType = Number.isFinite(Number(msg.camType)) ? Number(msg.camType) : null;

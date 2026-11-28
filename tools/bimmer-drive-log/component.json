@@ -1,7 +1,7 @@
 {
   "id": "bimmer-drive-log",
   "kind": "tool",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "title": "Nhật ký Camera & VietMap",
   "description": "In trạng thái trực tiếp, nhật ký trợ thủ bimmer-drive, mgu-sidecam và nhật ký dò biển báo lên cửa sổ MGU Store để kiểm tra nhanh.",
   "license": "GPL-3.0-or-later",

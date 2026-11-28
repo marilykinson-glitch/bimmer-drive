@@ -21,6 +21,7 @@ function tailFile(label, p, maxBytes) {
 tailFile('LIVE STATUS', '/run/bimmer-drive/status.json', 32768);
 tailFile('DAEMON LOG', '/var/opt/bimmer-drive/bimmer-drive.log', 24576);
 tailFile('PROBE LOG', '/var/opt/bimmer-drive/probe.log', 24576);
+tailFile('VIETMAP HUD RAW', '/var/opt/bimmer-drive/vmhud-raw.log', 16384);
 try {
     const j = cp.execFileSync('journalctl', ['-u', 'bimmer-drive.service', '-n', '60', '--no-pager'], { encoding: 'utf8', timeout: 5000 });
     process.stdout.write('\n=== JOURNAL (bimmer-drive.service) ===\n' + j + '\n');

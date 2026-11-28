@@ -336,7 +336,7 @@ async function runIntegration() {
     // Pre-populate leftover stale file in compatDir to verify ensureCompatSymlink replaces leftover directory cleanly
     fs.writeFileSync(path.join(compatDir, 'status.json'), '{}');
 
-    fs.writeFileSync(path.join(appRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'bimmer_drive', version: '1.1.2' }));
+    fs.writeFileSync(path.join(appRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'bimmer_drive', version: '1.1.3' }));
     fs.writeFileSync(path.join(anhRoot, 'source/javascript/kit/app-spec.json'), JSON.stringify({ id: 'anh_dai_dien', version: '1.0.3' }));
     fs.writeFileSync(path.join(wocRun, 'status.json'), JSON.stringify({ state: 'starting', reason: 'under an alert on the cluster', target: 'map', cluster: 1, hud: 1, hud_state: 'showing', hide_bmw_guidance: 1 }));
 
@@ -499,13 +499,13 @@ setInterval(() => {
     await sleep(400);
 
     const st0 = JSON.parse(fs.readFileSync(path.join(runDir, 'status.json'), 'utf8'));
-    ok(st0.version === '1.1.2' && st0.shown.indexOf('map') >= 0, 'v1.1.2 coordinator renders map layer while waze-on-cluster is suspended');
+    ok(st0.version === '1.1.3' && st0.shown.indexOf('map') >= 0, 'v1.1.3 coordinator renders map layer while waze-on-cluster is suspended');
     ok(selectedAdapter === '/org/bluez/hci1' && seenAliasWrites.length === 0, 'dbus-bluez-hud prefers secondary hci1 over hci0 and never renames Adapter1.Alias');
     const fullHudReply = Buffer.concat(seenNotifyChunks);
     ok(fullHudReply.toString('utf8').indexOf('MODEL:H1N,HW:1.0,FW:1.0,PROTOCOL:2.2.2') >= 0, 'dbus-bluez-hud emits chunked PropertiesChanged HUDInfo reply over D-Bus');
     ok(st0.vmhud && st0.vmhud.connected === true && st0.vmhud.bleState === 'advertising' && st0.vmhud.bleDetail === 'hci1 ok' && st0.vmhud.limit === 80 && st0.limit === 80 && st0.source === 'vmhud',
         'Live BlueZ GATT VietMap HUD connection updates cluster sign to 80 km/h with source=vmhud');
-    ok(fs.lstatSync(compatDir).isSymbolicLink() && JSON.parse(fs.readFileSync(path.join(compatDir, 'status.json'), 'utf8')).version === '1.1.2', 'leftover /run/vietmap-signs directory replaced cleanly with symlink');
+    ok(fs.lstatSync(compatDir).isSymbolicLink() && JSON.parse(fs.readFileSync(path.join(compatDir, 'status.json'), 'utf8')).version === '1.1.3', 'leftover /run/vietmap-signs directory replaced cleanly with symlink');
 
     // Test ESP32 USB Serial Bridge: must IGNORE BMW internal ttyACM0 (no allowlisted idVendor) and ACCEPT ESP32 VID 303a
     const mockSysTty = path.join(tmp, 'sys-tty');
@@ -530,6 +530,36 @@ setInterval(() => {
     sb.stop();
     ok(openedDevs.indexOf(internalTty) < 0 && openedDevs.indexOf(espTty) >= 0 && serialEvs.length === 1 && serialEvs[0].limit === 120 && serialEvs[0].next === 100,
         'USB serial bridge ignores internal ttyACM0 and opens ESP32 (VID 303a) ttyACM1');
+
+    // The BLE name VietMap Live 3.4.5 lists AND connects over BLE GATT (measured on a phone)
+    ok(VH.ADV_NAME === 'vietmap-HUD_V3(BLE)', 'bridge advertises the name VietMap Live connects to over BLE');
+
+    // Raw byte log filter: keeps events and changed frames, drops pictures / repeats / replies
+    const rf = VH.createRawFilter({ repeatMs: 30000 });
+    const camA = 'a55a37c3000000156b0af008010186a00000006432a0d6d1ffe56be6ec';
+    const camA2 = 'a55a37c3000000156b0af00b010186a00000006432c5f48081f8c5ae5f';
+    const camB = 'a55a37c3000000156b0af00c010186a00000003c3cada2fc9254c17949';
+    const t0 = Date.UTC(2026, 10, 29, 1, 0, 0);
+    const l1 = rf({ t: 'raw', dir: 'rx', hex: camA }, t0);
+    ok(/ rx 01 0186a00000006432$/.test(l1), 'raw filter keeps a camera frame as "rx <cmd> <body>"');
+    ok(rf({ t: 'raw', dir: 'rx', hex: camA2 }, t0 + 1000) === null, 'raw filter drops a repeat of the same body (other timestamp / trailer)');
+    ok(/ rx 01 0186a00000003c3c$/.test(rf({ t: 'raw', dir: 'rx', hex: camB }, t0 + 2000)), 'raw filter keeps a frame whose body changed');
+    ok(rf({ t: 'raw', dir: 'rx', hex: camB }, t0 + 40000) !== null, 'raw filter writes an unchanged frame again after repeatMs');
+    ok(rf({ t: 'raw', dir: 'rx', hex: 'a55a37c3000009f16b0af00740fe000009bfffd8' }, t0) === null
+        && rf({ t: 'raw', dir: 'rx', hex: '0047006f006f0067006c006500200049006e0063' }, t0) === null
+        && rf({ t: 'raw', dir: 'tx', hex: camA }, t0) === null, 'raw filter drops picture frames, their chunks and the bridge replies');
+    ok(/ evt connect$/.test(rf({ t: 'raw', dir: 'evt', hex: '', evt: 'connect' }, t0)), 'raw filter keeps connect / disconnect events');
+
+    // Serial bridge hands raw lines to onRaw and still parses vmhud lines
+    const rawTty = path.join(mockDevDir, 'ttyACM2');
+    fs.writeFileSync(rawTty, '{"t":"raw","dir":"rx","ms":1,"n":29,"hex":"' + camA + '"}\n{"t":"vmhud","v":1,"limit":50,"connected":true,"camAgeMs":0}\n');
+    mkp(path.join(mockSysTty, 'ttyACM2', 'device'));
+    fs.writeFileSync(path.join(mockSysTty, 'ttyACM2', 'idVendor'), '303a\n');
+    const rawSeen = [], jsonSeen = [];
+    const sb2 = VH.createSerialBridge({ device: rawTty, sysTtyDir: mockSysTty, scanMs: 500, onRaw: (m) => rawSeen.push(m), onJson: (m) => jsonSeen.push(m) });
+    await sleep(120);
+    sb2.stop();
+    ok(rawSeen.length === 1 && rawSeen[0].hex === camA && jsonSeen.length === 1 && jsonSeen[0].limit === 50, 'serial bridge passes raw lines to onRaw next to vmhud JSON');
 
     // Verify logic.signReport always displays VietMap HUD (BLE) line with bleDetail even if usbDev is set
     const rep = L.signReport({

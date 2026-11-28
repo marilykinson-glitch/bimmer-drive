@@ -10,3 +10,6 @@ android/local.properties
 *.jks
 .DS_Store
 *.idsig
+
+# firmware đã build (S3 gộp 16MB) - tự build theo firmware/vm-hud-esp32/README.md
+firmware/vm-hud-esp32/bin/
