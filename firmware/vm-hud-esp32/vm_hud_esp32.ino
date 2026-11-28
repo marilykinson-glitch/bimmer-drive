@@ -44,7 +44,9 @@ static String serialLine;
  * để các dòng JSON không bị trộn vào nhau và rxBuf chỉ một task chạm vào.
  */
 static BLECharacteristic* pNotifyChar = nullptr;
-static volatile bool bleConnected = false;
+static BLEServer* gServer = nullptr;
+static bool bleConnected = false;      /* chỉ loop() ghi: suy ra từ số kết nối thật */
+static unsigned long lastAdvKickMs = 0;
 static volatile bool evConnect = false;
 static volatile bool evDisconnect = false;
 static bool sendWelcomePending = false;
@@ -114,7 +116,7 @@ static void logHex(const char* dir, const uint8_t* data, size_t n) {
 }
 
 static void sendC3Frame(uint8_t cmd, const uint8_t* body, size_t bodyLen) {
-    if (!pNotifyChar || !bleConnected) return;
+    if (!pNotifyChar) return;
     size_t lenField = bodyLen + 13;
     size_t total = lenField + 8;
     if (total > 256) return;
@@ -271,12 +273,13 @@ static bool startsWithMagic(const uint8_t* d, size_t n) {
 }
 
 class ServerCB : public BLEServerCallbacks {
+    /* Callback chỉ bật cờ. Trạng thái "đang kết nối" KHÔNG lấy từ thứ tự hai callback này:
+       khi điện thoại nối lại, onDisconnect của kết nối cũ có thể tới SAU onConnect của kết nối
+       mới, làm firmware tưởng đã ngắt trong khi vẫn đang nối (không trả lời, không phát sóng). */
     void onConnect(BLEServer* pServer) override {
-        bleConnected = true;
         evConnect = true;
     }
     void onDisconnect(BLEServer* pServer) override {
-        bleConnected = false;
         evDisconnect = true;
     }
 };
@@ -289,25 +292,39 @@ class WriteCB : public BLECharacteristicCallbacks {
     }
 };
 
+static void markConnected(const char* why) {
+    bleConnected = true;
+    connectedAtMs = millis();
+    sendWelcomePending = true;
+    Serial.printf("{\"t\":\"raw\",\"dir\":\"evt\",\"hex\":\"\",\"evt\":\"%s\"}\n", why);
+    emitJson();
+}
+
 static void handleBleEvents() {
-    if (evDisconnect) {
-        evDisconnect = false;
-        evConnect = bleConnected;   /* đã nối lại ngay sau khi rớt */
+    bool linked = gServer && gServer->getConnectedCount() > 0;
+    bool sawConnect = evConnect, sawDisconnect = evDisconnect;
+    evConnect = false;
+    evDisconnect = false;
+
+    if (sawDisconnect) Serial.print("{\"t\":\"raw\",\"dir\":\"evt\",\"hex\":\"\",\"evt\":\"disconnect\"}\n");
+    if (sawConnect) {              /* kết nối mới (kể cả nối lại): bỏ dữ liệu dở của kết nối cũ */
+        rxLen = 0;
+        markConnected("connect");
+    } else if (linked && !bleConnected) {
+        markConnected("linked");
+    }
+    if (!linked && !sawConnect && bleConnected) {
+        bleConnected = false;
         sendWelcomePending = false;
         currentLimit = 0; nextLimit = 0; currentDist = 0; currentCamType = 0;
         rxLen = 0;
         clearRxQueue();
-        Serial.print("{\"t\":\"raw\",\"dir\":\"evt\",\"hex\":\"\",\"evt\":\"disconnect\"}\n");
         emitJson();
-        if (!bleConnected) { delay(50); BLEDevice::startAdvertising(); }
     }
-    if (evConnect) {
-        evConnect = false;
-        connectedAtMs = millis();
-        sendWelcomePending = true;
-        rxLen = 0;
-        Serial.print("{\"t\":\"raw\",\"dir\":\"evt\",\"hex\":\"\",\"evt\":\"connect\"}\n");
-        emitJson();
+    /* Không còn kết nối nào: bảo đảm luôn phát sóng lại (gọi lặp lại vô hại) */
+    if (!linked && !bleConnected && (millis() - lastAdvKickMs) >= 3000) {
+        lastAdvKickMs = millis();
+        BLEDevice::startAdvertising();
     }
 }
 
@@ -315,6 +332,7 @@ static void drainRx() {
     static RxItem it;
     while (popRx(it)) {
         logHex("rx", it.data, it.len);
+        if (!bleConnected) markConnected("rx-linked");   /* có dữ liệu tới thì chắc chắn đang nối */
         if (rxLen > 0 && startsWithMagic(it.data, it.len)) flushPartialFrame();
         if (rxLen + it.len > sizeof(rxBuf)) rxLen = 0;
         memcpy(rxBuf + rxLen, it.data, it.len);
@@ -347,6 +365,11 @@ static void pollSerialConfig() {
 
 void setup() {
     Serial.begin(115200);
+#if ARDUINO_USB_CDC_ON_BOOT
+    /* Không ai đọc cổng USB (cắm sạc, máy chưa mở cổng) thì việc in log không được
+       chặn loop(): nếu chặn, mạch trả lời VietMap trễ và app tự ngắt kết nối. */
+    Serial.setTxTimeoutMs(30);
+#endif
     prefs.begin("vmhud", true);
     advName = prefs.getString("name", DEVICE_NAME);
     prefs.end();
@@ -355,6 +378,7 @@ void setup() {
     BLEDevice::setMTU(200);
 
     BLEServer* pServer = BLEDevice::createServer();
+    gServer = pServer;
     pServer->setCallbacks(new ServerCB());
 
     BLEService* pService = pServer->createService(SERVICE_UUID);
